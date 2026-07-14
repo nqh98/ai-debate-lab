@@ -1,0 +1,28 @@
+# AI Debate Lab agent roster.
+# Add/remove entries or flip `enabled` to control who debates.
+# API keys come from environment variables only.
+agents:
+  - name: claude
+    backend: cli
+    command: ["claude", "-p", "{prompt}"]
+    enabled: true
+
+  - name: chatgpt
+    backend: api
+    provider: openai
+    model: gpt-5
+    api_key_env: OPENAI_API_KEY
+    enabled: true
+
+  - name: gemini
+    backend: cli
+    command: ["gemini", "-p", "{prompt}"]
+    enabled: true
+
+  - name: grok
+    backend: api
+    provider: openai          # xAI's API is OpenAI-compatible
+    base_url: https://api.x.ai/v1
+    model: grok-4
+    api_key_env: XAI_API_KEY
+    enabled: true
