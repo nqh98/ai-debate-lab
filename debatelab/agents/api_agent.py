@@ -78,12 +78,13 @@ class ApiAgent(Agent):
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read().decode())
+                raw_response = resp.read().decode()
         except urllib.error.HTTPError as e:
             raise AgentError(f"{self.name}: HTTP {e.code}: {e.read().decode()[:500]}")
         except (urllib.error.URLError, TimeoutError) as e:
             raise AgentError(f"{self.name}: request failed: {e}")
         try:
+            data = json.loads(raw_response)
             return parse(data).strip()
-        except (KeyError, IndexError, TypeError) as e:
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError) as e:
             raise AgentError(f"{self.name}: unexpected response shape: {e!r}")

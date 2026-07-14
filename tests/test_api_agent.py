@@ -11,6 +11,7 @@ from debatelab.agents.base import AgentError
 class Recorder(BaseHTTPRequestHandler):
     calls = []
     payload = {}
+    raw_payload = None
     status = 200
 
     def do_POST(self):
@@ -19,7 +20,7 @@ class Recorder(BaseHTTPRequestHandler):
         Recorder.calls.append(
             {"path": self.path, "headers": dict(self.headers), "body": body}
         )
-        data = json.dumps(Recorder.payload).encode()
+        data = Recorder.raw_payload or json.dumps(Recorder.payload).encode()
         self.send_response(Recorder.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -33,6 +34,7 @@ class Recorder(BaseHTTPRequestHandler):
 @pytest.fixture
 def server():
     Recorder.calls = []
+    Recorder.raw_payload = None
     Recorder.status = 200
     srv = HTTPServer(("127.0.0.1", 0), Recorder)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -93,6 +95,22 @@ def test_http_error_raises(server, monkeypatch):
     Recorder.payload = {"error": "boom"}
     agent = ApiAgent("x", "openai", "gpt-5", "TEST_KEY", base_url=server)
     with pytest.raises(AgentError, match="HTTP 500"):
+        agent.ask("hello")
+
+
+def test_malformed_json_raises_agent_error(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "k")
+    Recorder.raw_payload = b"not-json"
+    agent = ApiAgent("x", "openai", "gpt-5", "TEST_KEY", base_url=server)
+    with pytest.raises(AgentError, match="unexpected response shape"):
+        agent.ask("hello")
+
+
+def test_non_string_provider_content_raises_agent_error(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "k")
+    Recorder.payload = {"choices": [{"message": {"content": 123}}]}
+    agent = ApiAgent("x", "openai", "gpt-5", "TEST_KEY", base_url=server)
+    with pytest.raises(AgentError, match="unexpected response shape"):
         agent.ask("hello")
 
 
