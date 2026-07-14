@@ -1,5 +1,6 @@
 import pytest
 
+from debatelab.agents import models
 from debatelab.agents.base import AgentError
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
@@ -43,6 +44,17 @@ def test_single_round_consensus(tmp_path):
                      "candidate", "vote", "consensus"):
         assert expected in types
     assert "pending human decision" in store.read_summary(did)
+
+
+def test_phases_request_matching_model_tiers(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem?")
+    agents = [happy_agent("a"), happy_agent("b")]
+    Orchestrator(store, agents).run(did)
+    # propose/critique/revise are deep work; nominate and vote are fast.
+    assert agents[0].tasks == [
+        models.DEEP, models.DEEP, models.DEEP, models.FAST, models.FAST
+    ]
 
 
 def test_no_consensus_after_max_rounds(tmp_path):

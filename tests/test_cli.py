@@ -104,6 +104,51 @@ def test_agents_command_reports_readiness(workdir, capsys, monkeypatch):
     assert "disabled" in out
 
 
+def test_agents_command_shows_resolved_auto_backend(workdir, capsys, monkeypatch):
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    (workdir / "agents.yaml").write_text(
+        "agents:\n"
+        "  - name: dual\n    backend: auto\n"
+        "    command: [\"echo\", \"{prompt}\"]\n"
+        "    provider: openai\n    model: m\n    api_key_env: MISSING_KEY\n"
+    )
+    cli.main(["agents"])
+    out = capsys.readouterr().out
+    assert "ready (cli)" in out
+
+
+def test_run_skips_agents_that_cannot_respond(workdir, capsys, monkeypatch):
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    cli.main(["new", "Topic"])
+    debate_id = capsys.readouterr().out.strip()
+    (workdir / "agents.yaml").write_text(
+        "agents:\n"
+        "  - name: a\n    backend: cli\n    command: [\"echo\", \"{prompt}\"]\n"
+        "  - name: b\n    backend: cli\n    command: [\"echo\", \"{prompt}\"]\n"
+        "  - name: keyless\n    backend: api\n    provider: openai\n"
+        "    model: m\n    api_key_env: MISSING_KEY\n"
+    )
+    cli.main(["run", debate_id, "--max-rounds", "1"])
+    out = capsys.readouterr().out
+    assert "skipping agent 'keyless'" in out
+    assert "MISSING_KEY" in out
+    assert "final status:" in out
+
+
+def test_run_exits_when_skipping_leaves_too_few_agents(workdir, capsys, monkeypatch):
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    cli.main(["new", "Topic"])
+    debate_id = capsys.readouterr().out.strip()
+    (workdir / "agents.yaml").write_text(
+        "agents:\n"
+        "  - name: a\n    backend: cli\n    command: [\"echo\", \"{prompt}\"]\n"
+        "  - name: keyless\n    backend: api\n    provider: openai\n"
+        "    model: m\n    api_key_env: MISSING_KEY\n"
+    )
+    with pytest.raises(SystemExit, match="at least 2"):
+        cli.main(["run", debate_id])
+
+
 def test_run_needs_two_enabled_agents(workdir, capsys):
     cli.main(["new", "Topic"])
     debate_id = capsys.readouterr().out.strip()

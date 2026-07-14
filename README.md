@@ -1,6 +1,6 @@
 # AI Debate Lab
 
-Multiple AI agents (Claude, ChatGPT, Gemini, Grok, ...) analyze the same
+Multiple AI agents (Claude, Codex, Antigravity, Grok, ...) analyze the same
 problem in a structured debate — propose, critique, revise, vote — until
 they unanimously agree on one answer. Nothing is final until a human
 approves it. Every artifact is a plain file you can read, diff, and commit.
@@ -14,7 +14,19 @@ source .venv/bin/activate
 ```
 
 Configure agents in `agents.yaml` (flip `enabled`, add entries, set
-`api_key_env` env vars for API-backed agents). Check readiness:
+`api_key_env` env vars for API-backed agents). Each agent uses one of three
+backends: `cli` (runs a local command), `api` (direct HTTP call using an API
+key), or `auto` (uses the `command` if its binary is on PATH, otherwise
+falls back to the API key — configure both).
+
+Agents are named after the platform that powers them (the Antigravity
+agent runs Gemini through the `agy` CLI). Model names are not pinned:
+each agent auto-selects the most appropriate model per debate task —
+the strongest available model for propose/critique/revise, the cheapest
+for nominate/vote — from the models the platform reports at runtime
+(`models_command` for CLI backends, the provider's models endpoint for
+API backends). Platforms that can't report models use their own default
+routing; add `model: <name>` to an entry to pin one. Check readiness:
 
 ```bash
 debate agents          # static readiness check
@@ -64,7 +76,9 @@ Each round: **critique → revise → vote** (round 1 starts with **propose**).
 The vote phase nominates a candidate (plurality, config-order tie-break),
 then every agent accepts/rejects it. Unanimous accept = consensus →
 `awaiting_human`. Failed agent calls retry once, then abstain for the
-phase; a phase needs at least 2 responders.
+phase; a phase needs at least 2 responders. Agents that can't respond at
+all (missing API key, command not on PATH) are skipped at `debate run`
+startup with a warning — the debate proceeds with the remaining agents.
 
 ## Tests
 

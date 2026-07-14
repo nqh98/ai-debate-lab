@@ -1,5 +1,11 @@
 # AI Debate Lab agent roster.
-# Add/remove entries or flip `enabled` to control who debates.
+# Agents are named after the platform/CLI that powers them.
+# No model names are pinned here: each platform auto-selects the most
+# appropriate model per debate task — strongest for propose/critique/revise,
+# cheapest for nominate/vote. Models are discovered at runtime via
+# `models_command` (CLI backends that can list their models) or the
+# provider's models endpoint (API backends); platforms that can't report
+# models use their own default routing. Add `model: <name>` to pin one.
 # API keys come from environment variables only.
 agents:
   - name: claude
@@ -7,22 +13,23 @@ agents:
     command: ["claude", "-p", "{prompt}"]
     enabled: true
 
-  - name: chatgpt
-    backend: api
+  - name: codex
+    backend: auto              # codex CLI if installed, else OpenAI API key
+    command: ["codex", "exec", "--skip-git-repo-check", "{prompt}"]
     provider: openai
-    model: gpt-5
     api_key_env: OPENAI_API_KEY
     enabled: true
 
-  - name: gemini
+  - name: antigravity          # Antigravity CLI (agy) drives Gemini
     backend: cli
-    command: ["gemini", "-p", "{prompt}"]
+    command: ["agy", "--model={model}", "-p", "{prompt}"]
+    models_command: ["agy", "models"]
     enabled: true
 
   - name: grok
-    backend: api
+    backend: auto              # grok CLI if installed, else xAI API key
+    command: ["grok", "-p", "{prompt}"]
     provider: openai          # xAI's API is OpenAI-compatible
     base_url: https://api.x.ai/v1
-    model: grok-4
     api_key_env: XAI_API_KEY
-    enabled: true
+    enabled: false

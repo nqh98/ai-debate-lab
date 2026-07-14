@@ -6,7 +6,7 @@ import sys
 from importlib import resources
 from pathlib import Path
 
-from .agents import registry
+from .agents import models, registry
 from .store import DebateStore, render_summary
 
 
@@ -36,7 +36,16 @@ def cmd_run(args):
 
     store = get_store()
     specs = registry.load_agent_specs(args.config)
-    agents = registry.build_agents(specs)
+    ready = []
+    for spec in specs:
+        if not spec.enabled:
+            continue
+        problem = registry.spec_problem(spec)
+        if problem:
+            print(f"skipping agent '{spec.name}': {problem}", flush=True)
+            continue
+        ready.append(spec)
+    agents = registry.build_agents(ready)
     try:
         orch = Orchestrator(
             store,
@@ -139,7 +148,12 @@ def cmd_agents(args):
             verdict = "disabled"
         else:
             problem = registry.spec_problem(spec)
-            verdict = f"NOT READY — {problem}" if problem else "ready"
+            if problem:
+                verdict = f"NOT READY — {problem}"
+            elif spec.backend == "auto":
+                verdict = f"ready ({registry.resolve_backend(spec)})"
+            else:
+                verdict = "ready"
         print(f"{spec.name:<12} {spec.backend:<4} {verdict}")
     if args.ping:
         ready = [
@@ -147,7 +161,7 @@ def cmd_agents(args):
         ]
         for agent in registry.build_agents(ready):
             try:
-                agent.ask("Reply with the single word: pong")
+                agent.ask("Reply with the single word: pong", task=models.FAST)
                 print(f"{agent.name}: ping ok")
             except Exception as e:
                 print(f"{agent.name}: ping FAILED — {e}")

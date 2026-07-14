@@ -3,6 +3,7 @@ checkpoints state after every phase so interrupted runs resume."""
 import concurrent.futures as cf
 
 from . import prompts, protocol
+from .agents import models
 from .agents.base import AgentError
 from .store import render_summary
 
@@ -73,7 +74,8 @@ class Orchestrator:
         self.store.write_state(debate_id, state)
         self.store.write_summary(debate_id, render_summary(state))
 
-    def _fanout(self, debate_id, state, phase, prompt_for) -> dict:
+    def _fanout(self, debate_id, state, phase, prompt_for,
+                task=models.DEEP) -> dict:
         """Ask every agent concurrently. One retry per agent; a second failure
         records an abstention. Raises DebateHalted if fewer than 2 responded."""
         results = {}
@@ -81,9 +83,9 @@ class Orchestrator:
         def call(name):
             prompt = prompt_for(name)
             try:
-                return self.agents[name].ask(prompt)
+                return self.agents[name].ask(prompt, task)
             except AgentError:
-                return self.agents[name].ask(prompt)
+                return self.agents[name].ask(prompt, task)
 
         with cf.ThreadPoolExecutor(max_workers=len(self.order)) as ex:
             futures = {ex.submit(call, name): name for name in self.order}
@@ -157,6 +159,7 @@ class Orchestrator:
         nom_raw = self._fanout(
             debate_id, state, "vote",
             lambda name: prompts.nominate_prompt(name, problem, proposals, names),
+            task=models.FAST,
         )
         nominations = {}
         for name, text in nom_raw.items():
@@ -179,6 +182,7 @@ class Orchestrator:
             lambda name: prompts.vote_prompt(
                 name, problem, winner, proposals[winner]
             ),
+            task=models.FAST,
         )
         votes = {}
         for name, text in vote_raw.items():

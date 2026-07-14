@@ -1,3 +1,4 @@
+from debatelab.agents import models
 from debatelab.agents.base import Agent, AgentError
 
 
@@ -9,9 +10,11 @@ class MockAgent(Agent):
         super().__init__(name)
         self.responses = list(responses)
         self.prompts = []
+        self.tasks = []
 
-    def ask(self, prompt: str) -> str:
+    def ask(self, prompt: str, task: str = models.DEEP) -> str:
         self.prompts.append(prompt)
+        self.tasks.append(task)
         if not self.responses:
             raise AgentError(f"{self.name}: no scripted response left")
         item = self.responses.pop(0)

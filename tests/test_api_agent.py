@@ -4,7 +4,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from debatelab.agents.api_agent import ApiAgent, DRIVERS
+from debatelab.agents import models
+from debatelab.agents.api_agent import ApiAgent, DRIVERS, MODEL_LISTS
 from debatelab.agents.base import AgentError
 
 
@@ -13,14 +14,20 @@ class Recorder(BaseHTTPRequestHandler):
     payload = {}
     raw_payload = None
     status = 200
+    models_payload = {}
 
     def do_POST(self):
         length = int(self.headers["Content-Length"])
         body = json.loads(self.rfile.read(length))
+        self._respond(body, Recorder.raw_payload or json.dumps(Recorder.payload).encode())
+
+    def do_GET(self):
+        self._respond(None, json.dumps(Recorder.models_payload).encode())
+
+    def _respond(self, body, data):
         Recorder.calls.append(
             {"path": self.path, "headers": dict(self.headers), "body": body}
         )
-        data = Recorder.raw_payload or json.dumps(Recorder.payload).encode()
         self.send_response(Recorder.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -36,6 +43,7 @@ def server():
     Recorder.calls = []
     Recorder.raw_payload = None
     Recorder.status = 200
+    Recorder.models_payload = {}
     srv = HTTPServer(("127.0.0.1", 0), Recorder)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
@@ -45,6 +53,7 @@ def server():
 
 def test_known_drivers():
     assert set(DRIVERS) == {"openai", "anthropic", "google"}
+    assert set(MODEL_LISTS) == set(DRIVERS)
 
 
 def test_openai_driver_roundtrip(server, monkeypatch):
@@ -117,3 +126,59 @@ def test_non_string_provider_content_raises_agent_error(server, monkeypatch):
 def test_unknown_provider_rejected():
     with pytest.raises(ValueError, match="unknown provider"):
         ApiAgent("x", "mystery", "m", "KEY")
+
+
+def test_no_model_discovers_and_selects_per_task(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "k")
+    Recorder.models_payload = {
+        "data": [{"id": "gpt-9-mini"}, {"id": "gpt-9-pro"}]
+    }
+    Recorder.payload = {"choices": [{"message": {"content": "ok"}}]}
+    agent = ApiAgent("gpt", "openai", None, "TEST_KEY", base_url=server)
+    assert agent.ask("hello", task=models.DEEP) == "ok"
+    assert agent.ask("hello", task=models.FAST) == "ok"
+    list_calls = [c for c in Recorder.calls if c["path"] == "/models"]
+    chat_calls = [c for c in Recorder.calls if c["path"] == "/chat/completions"]
+    assert len(list_calls) == 1  # discovery is cached
+    assert chat_calls[0]["body"]["model"] == "gpt-9-pro"
+    assert chat_calls[1]["body"]["model"] == "gpt-9-mini"
+
+
+def test_no_model_falls_back_to_first_listed(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "k")
+    Recorder.models_payload = {"data": [{"id": "model-a"}, {"id": "model-b"}]}
+    Recorder.payload = {"choices": [{"message": {"content": "ok"}}]}
+    agent = ApiAgent("gpt", "openai", None, "TEST_KEY", base_url=server)
+    assert agent.ask("hello") == "ok"
+    chat = [c for c in Recorder.calls if c["path"] == "/chat/completions"][0]
+    assert chat["body"]["model"] == "model-a"
+
+
+def test_no_model_and_empty_list_raises(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "k")
+    Recorder.models_payload = {"data": []}
+    agent = ApiAgent("gpt", "openai", None, "TEST_KEY", base_url=server)
+    with pytest.raises(AgentError, match="lists no models"):
+        agent.ask("hello")
+
+
+def test_google_model_discovery_strips_prefix(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "k")
+    Recorder.models_payload = {
+        "models": [{"name": "models/g-pro"}, {"name": "models/g-flash"}]
+    }
+    Recorder.payload = {
+        "candidates": [{"content": {"parts": [{"text": "ok"}]}}]
+    }
+    agent = ApiAgent("gm", "google", None, "TEST_KEY", base_url=server)
+    assert agent.ask("hello", task=models.FAST) == "ok"
+    chat = [c for c in Recorder.calls if ":generateContent" in c["path"]][0]
+    assert chat["path"] == "/v1beta/models/g-flash:generateContent"
+
+
+def test_pinned_model_skips_discovery(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "k")
+    Recorder.payload = {"choices": [{"message": {"content": "ok"}}]}
+    agent = ApiAgent("gpt", "openai", "pinned", "TEST_KEY", base_url=server)
+    assert agent.ask("hello") == "ok"
+    assert all(c["path"] != "/models" for c in Recorder.calls)

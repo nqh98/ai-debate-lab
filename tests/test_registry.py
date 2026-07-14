@@ -7,6 +7,7 @@ from debatelab.agents.registry import (
     ConfigError,
     build_agents,
     load_agent_specs,
+    resolve_backend,
     spec_problem,
 )
 
@@ -104,6 +105,76 @@ def test_build_agents_skips_disabled_and_builds_types(monkeypatch):
     assert [a.name for a in agents] == ["a", "b"]
     assert isinstance(agents[0], CliAgent)
     assert isinstance(agents[1], ApiAgent)
+
+
+AUTO_SPEC_KWARGS = dict(
+    name="x",
+    backend="auto",
+    provider="openai",
+    model="gpt-5",
+    api_key_env="AUTO_KEY",
+)
+
+
+def test_load_accepts_auto_backend(tmp_path):
+    text = (
+        "agents:\n"
+        "  - name: dual\n"
+        "    backend: auto\n"
+        "    command: [echo, '{prompt}']\n"
+        "    provider: openai\n"
+        "    model: gpt-5\n"
+        "    api_key_env: AUTO_KEY\n"
+    )
+    specs = load_agent_specs(write(tmp_path, text))
+    assert specs[0].backend == "auto"
+
+
+def test_auto_prefers_cli_when_command_available(monkeypatch):
+    monkeypatch.delenv("AUTO_KEY", raising=False)
+    spec = AgentSpec(command=["echo", "{prompt}"], **AUTO_SPEC_KWARGS)
+    assert spec_problem(spec) is None
+    assert resolve_backend(spec) == "cli"
+    assert isinstance(build_agents([spec])[0], CliAgent)
+
+
+def test_auto_falls_back_to_api_when_command_missing(monkeypatch):
+    monkeypatch.setenv("AUTO_KEY", "k")
+    spec = AgentSpec(command=["/no/such/bin"], **AUTO_SPEC_KWARGS)
+    assert spec_problem(spec) is None
+    assert resolve_backend(spec) == "api"
+    assert isinstance(build_agents([spec])[0], ApiAgent)
+
+
+def test_auto_not_ready_when_both_unavailable(monkeypatch):
+    monkeypatch.delenv("AUTO_KEY", raising=False)
+    spec = AgentSpec(command=["/no/such/bin"], **AUTO_SPEC_KWARGS)
+    problem = spec_problem(spec)
+    assert "not found" in problem and "AUTO_KEY" in problem
+
+
+def test_api_spec_without_model_is_ready(monkeypatch):
+    monkeypatch.setenv("OK_KEY", "k")
+    spec = AgentSpec(
+        name="x", backend="api", provider="openai", api_key_env="OK_KEY"
+    )
+    assert spec_problem(spec) is None
+    agent = build_agents([spec])[0]
+    assert isinstance(agent, ApiAgent) and agent.model is None
+
+
+def test_models_command_is_loaded_and_passed_to_cli_agent(tmp_path):
+    text = (
+        "agents:\n"
+        "  - name: x\n"
+        "    backend: cli\n"
+        "    command: [echo, '--model={model}', '{prompt}']\n"
+        "    models_command: [echo, models]\n"
+    )
+    specs = load_agent_specs(write(tmp_path, text))
+    assert specs[0].models_command == ["echo", "models"]
+    agent = build_agents(specs)[0]
+    assert agent.models_command == ["echo", "models"]
 
 
 def test_build_agents_raises_on_broken_enabled_spec(monkeypatch):
