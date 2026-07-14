@@ -22,7 +22,7 @@ class Orchestrator:
 
     def run(self, debate_id: str, max_rounds: int | None = None) -> str:
         state = self.store.read_state(debate_id)
-        if state["status"] in ("approved", "rejected"):
+        if state["status"] in ("awaiting_human", "approved", "rejected"):
             return state["status"]
         if max_rounds is not None:
             state["max_rounds"] = max_rounds
@@ -48,7 +48,6 @@ class Orchestrator:
                 self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
                 getattr(self, f"_phase_{phase}")(debate_id, state, problem)
                 state["last_completed_phase"] = phase
-                self._checkpoint(debate_id, state)
                 if phase == "vote" and protocol.check_consensus(state["votes"]):
                     state["status"] = "awaiting_human"
                     self.store.append_event(debate_id, {
@@ -57,7 +56,9 @@ class Orchestrator:
                         "type": "consensus",
                         "content": state["candidate"]["text"],
                     })
+                    self._checkpoint(debate_id, state)
                     break
+                self._checkpoint(debate_id, state)
         except DebateHalted as e:
             state["status"] = "error"
             self.store.append_event(debate_id, {

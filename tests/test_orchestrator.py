@@ -136,3 +136,28 @@ def test_finished_debate_is_not_rerun(tmp_path):
     store.write_state(did, state)
     agents = [MockAgent("a", []), MockAgent("b", [])]
     assert Orchestrator(store, agents).run(did) == "approved"
+
+
+def test_resume_after_vote_checkpoint_retains_consensus(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem?")
+    orchestrator = Orchestrator(store, [happy_agent("a"), happy_agent("b")])
+    checkpoint = orchestrator._checkpoint
+
+    def interrupt_after_vote_write(debate_id, state):
+        checkpoint(debate_id, state)
+        if state["last_completed_phase"] == "vote":
+            raise RuntimeError("interrupted after vote checkpoint")
+
+    orchestrator._checkpoint = interrupt_after_vote_write
+    with pytest.raises(RuntimeError, match="interrupted after vote checkpoint"):
+        orchestrator.run(did)
+
+    persisted = store.read_state(did)
+    assert persisted["status"] == "awaiting_human"
+    assert persisted["last_completed_phase"] == "vote"
+    assert persisted["round"] == 1
+
+    empty_agents = [MockAgent("a", []), MockAgent("b", [])]
+    assert Orchestrator(store, empty_agents).run(did) == "awaiting_human"
+    assert store.read_state(did)["round"] == 1
