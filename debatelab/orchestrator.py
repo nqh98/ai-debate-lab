@@ -1,0 +1,190 @@
+"""Runs a debate: fans out phase prompts to all agents, applies the protocol,
+checkpoints state after every phase so interrupted runs resume."""
+import concurrent.futures as cf
+
+from . import prompts, protocol
+from .agents.base import AgentError
+from .store import render_summary
+
+
+class DebateHalted(Exception):
+    """Too few agents responded to continue the debate."""
+
+
+class Orchestrator:
+    def __init__(self, store, agents, progress=lambda msg: None):
+        if len(agents) < 2:
+            raise ValueError("a debate needs at least 2 agents")
+        self.store = store
+        self.agents = {a.name: a for a in agents}
+        self.order = [a.name for a in agents]
+        self.progress = progress
+
+    def run(self, debate_id: str, max_rounds: int | None = None) -> str:
+        state = self.store.read_state(debate_id)
+        if state["status"] in ("approved", "rejected"):
+            return state["status"]
+        if max_rounds is not None:
+            state["max_rounds"] = max_rounds
+        state["status"] = "running"
+        problem = self.store.read_problem(debate_id)
+        try:
+            while True:
+                rnd, phase = protocol.next_phase(
+                    state["round"], state["last_completed_phase"]
+                )
+                if rnd > state["max_rounds"]:
+                    state["status"] = "no_consensus"
+                    self.store.append_event(debate_id, {
+                        "round": state["round"], "phase": "end", "agent": None,
+                        "type": "no_consensus",
+                        "content": (
+                            f"no unanimous vote after {state['max_rounds']} rounds"
+                        ),
+                    })
+                    break
+                state["round"] = rnd
+                state["abstained"] = []
+                self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
+                getattr(self, f"_phase_{phase}")(debate_id, state, problem)
+                state["last_completed_phase"] = phase
+                self._checkpoint(debate_id, state)
+                if phase == "vote" and protocol.check_consensus(state["votes"]):
+                    state["status"] = "awaiting_human"
+                    self.store.append_event(debate_id, {
+                        "round": rnd, "phase": "vote",
+                        "agent": state["candidate"]["agent"],
+                        "type": "consensus",
+                        "content": state["candidate"]["text"],
+                    })
+                    break
+        except DebateHalted as e:
+            state["status"] = "error"
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "end", "agent": None,
+                "type": "error", "content": str(e),
+            })
+        self._checkpoint(debate_id, state)
+        self.store.rebuild_index()
+        return state["status"]
+
+    def _checkpoint(self, debate_id, state):
+        self.store.write_state(debate_id, state)
+        self.store.write_summary(debate_id, render_summary(state))
+
+    def _fanout(self, debate_id, state, phase, prompt_for) -> dict:
+        """Ask every agent concurrently. One retry per agent; a second failure
+        records an abstention. Raises DebateHalted if fewer than 2 responded."""
+        results = {}
+
+        def call(name):
+            prompt = prompt_for(name)
+            try:
+                return self.agents[name].ask(prompt)
+            except AgentError:
+                return self.agents[name].ask(prompt)
+
+        with cf.ThreadPoolExecutor(max_workers=len(self.order)) as ex:
+            futures = {ex.submit(call, name): name for name in self.order}
+            for fut in cf.as_completed(futures):
+                name = futures[fut]
+                try:
+                    results[name] = fut.result()
+                except AgentError as e:
+                    state["abstained"] = sorted(set(state["abstained"]) | {name})
+                    self.store.append_event(debate_id, {
+                        "round": state["round"], "phase": phase, "agent": name,
+                        "type": "abstained", "content": str(e),
+                    })
+        if len(results) < 2:
+            raise DebateHalted(
+                f"only {len(results)} agent(s) responded in phase "
+                f"'{phase}' — need at least 2"
+            )
+        return results
+
+    def _phase_propose(self, debate_id, state, problem):
+        results = self._fanout(
+            debate_id, state, "propose",
+            lambda name: prompts.propose_prompt(name, problem),
+        )
+        state["proposals"] = results
+        for name, text in results.items():
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "propose", "agent": name,
+                "type": "proposal", "content": text,
+            })
+
+    def _phase_critique(self, debate_id, state, problem):
+        proposals = state["proposals"]
+        reject_reasons = {
+            name: v["reason"]
+            for name, v in state.get("votes", {}).items()
+            if v["vote"] == "reject"
+        }
+
+        def prompt_for(name):
+            others = {n: t for n, t in proposals.items() if n != name}
+            return prompts.critique_prompt(
+                name, problem, others, reject_reasons or None
+            )
+
+        results = self._fanout(debate_id, state, "critique", prompt_for)
+        state["critiques"] = results
+        for name, text in results.items():
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "critique", "agent": name,
+                "type": "critique", "content": text,
+            })
+
+    def _phase_revise(self, debate_id, state, problem):
+        def prompt_for(name):
+            own = state["proposals"].get(name, "(no previous proposal)")
+            return prompts.revise_prompt(name, problem, own, state["critiques"])
+
+        results = self._fanout(debate_id, state, "revise", prompt_for)
+        state["proposals"] = {**state["proposals"], **results}
+        for name, text in results.items():
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "revise", "agent": name,
+                "type": "revision", "content": text,
+            })
+
+    def _phase_vote(self, debate_id, state, problem):
+        proposals = state["proposals"]
+        names = list(proposals)
+        nom_raw = self._fanout(
+            debate_id, state, "vote",
+            lambda name: prompts.nominate_prompt(name, problem, proposals, names),
+        )
+        nominations = {}
+        for name, text in nom_raw.items():
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "vote", "agent": name,
+                "type": "nomination", "content": text,
+            })
+            nominee = prompts.parse_nomination(text, names)
+            if nominee:
+                nominations[name] = nominee
+        order_with_proposals = [n for n in self.order if n in proposals]
+        winner = protocol.select_candidate(nominations, order_with_proposals)
+        state["candidate"] = {"agent": winner, "text": proposals[winner]}
+        self.store.append_event(debate_id, {
+            "round": state["round"], "phase": "vote", "agent": winner,
+            "type": "candidate", "content": proposals[winner],
+        })
+        vote_raw = self._fanout(
+            debate_id, state, "vote",
+            lambda name: prompts.vote_prompt(
+                name, problem, winner, proposals[winner]
+            ),
+        )
+        votes = {}
+        for name, text in vote_raw.items():
+            verdict, reason = prompts.parse_vote(text)
+            votes[name] = {"vote": verdict, "reason": reason}
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "vote", "agent": name,
+                "type": "vote", "verdict": verdict, "content": text,
+            })
+        state["votes"] = votes
