@@ -34,7 +34,7 @@ debate approve 20260714-which-caching-strategy -m "agreed"
 `run` resumes from the last completed phase if interrupted. If no unanimous
 vote happens within `--max-rounds` (default 5), the debate ends
 `no_consensus` with all dissents recorded — you still decide with
-approve/reject.
+approve/reject. `--max-rounds` must be at least 1.
 
 Human decisions are recovered from the append-only `human_decision` transcript
 event. Repeating the same approve/reject command reconciles `state.json`,

@@ -135,6 +135,41 @@ def test_approve_rejects_traversal_id_without_writing_outside_root(workdir):
     assert not (outside / "transcript.jsonl").exists()
 
 
+def test_status_rejects_symlinked_debate_without_reading_outside_root(workdir):
+    root = workdir / "debates"
+    outside = workdir / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "state.json").write_text(
+        '{"id":"example","status":"approved","round":99,"max_rounds":99}'
+    )
+    (root / "example").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="outside debate root|symlink"):
+        cli.main(["status", "example"])
+
+
+def test_approve_rejects_symlinked_debate_without_writing_outside(workdir):
+    root = workdir / "debates"
+    outside = workdir / "outside"
+    root.mkdir()
+    outside.mkdir()
+    state_file = outside / "state.json"
+    transcript_file = outside / "transcript.jsonl"
+    summary_file = outside / "summary.md"
+    state_text = '{"status":"awaiting_human","round":0}'
+    state_file.write_text(state_text)
+    transcript_file.write_text("")
+    summary_file.write_text("outside summary\n")
+    (root / "example").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="outside debate root|symlink"):
+        cli.main(["approve", "example", "-m", "do not write"])
+    assert state_file.read_text() == state_text
+    assert transcript_file.read_text() == ""
+    assert summary_file.read_text() == "outside summary\n"
+
+
 def test_max_rounds_must_be_positive(workdir):
     with pytest.raises(SystemExit) as exc:
         cli.main(["run", "any-id", "--max-rounds", "0"])

@@ -46,6 +46,20 @@ def test_path_rejects_ids_outside_immediate_root_children(tmp_path, debate_id):
         store.path(debate_id)
 
 
+def test_path_rejects_symlinked_debate_directory_and_list_excludes_it(tmp_path):
+    root = tmp_path / "debates"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "state.json").write_text('{"id": "example"}')
+    (root / "example").symlink_to(outside, target_is_directory=True)
+    store = DebateStore(root)
+
+    with pytest.raises(ValueError, match="outside debate root|symlink"):
+        store.path("example")
+    assert store.list_ids() == []
+
+
 def test_events_roundtrip_with_ts(tmp_path):
     store = DebateStore(tmp_path / "debates")
     did = store.create("T", "p")

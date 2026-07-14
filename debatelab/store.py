@@ -34,7 +34,14 @@ class DebateStore:
             raise ValueError(
                 f"invalid debate id {debate_id!r}: expected a single directory name"
             )
-        return self.root / debate_id
+        target = self.root / debate_id
+        if target.is_symlink():
+            raise ValueError(
+                f"invalid debate id {debate_id!r}: symlinks are not allowed"
+            )
+        if target.resolve(strict=False).parent != self.root.resolve(strict=False):
+            raise ValueError(f"invalid debate id {debate_id!r}: outside debate root")
+        return target
 
     def create(self, title, problem, context_texts=()) -> str:
         base = f"{datetime.now().strftime('%Y%m%d')}-{slugify(title)}"
@@ -100,7 +107,14 @@ class DebateStore:
     def list_ids(self) -> list:
         if not self.root.exists():
             return []
-        return sorted(p.name for p in self.root.iterdir() if (p / "state.json").exists())
+        debate_ids = []
+        for entry in self.root.iterdir():
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            debate_path = self.path(entry.name)
+            if (debate_path / "state.json").exists():
+                debate_ids.append(entry.name)
+        return sorted(debate_ids)
 
     def rebuild_index(self):
         entries = []
