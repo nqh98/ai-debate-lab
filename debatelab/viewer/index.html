@@ -55,6 +55,7 @@
 const app = document.getElementById("app");
 const back = document.getElementById("back");
 let pollTimer = null;
+let routeGeneration = 0;
 
 function esc(s) {
   const d = document.createElement("div");
@@ -70,7 +71,15 @@ async function fetchJSONL(url) {
   const r = await fetch(url + "?t=" + Date.now());
   if (!r.ok) return [];
   const text = await r.text();
-  return text.split("\n").filter(l => l.trim()).map(l => JSON.parse(l));
+  const trailingPartial = !text.endsWith("\n");
+  const lines = text.split("\n").filter(l => l.trim());
+  return lines.map((line, i) => {
+    try { return JSON.parse(line); }
+    catch (e) {
+      if (trailingPartial && i === lines.length - 1) return null;
+      throw e;
+    }
+  }).filter(event => event !== null);
 }
 function badge(status) {
   return `<span class="badge ${esc(status)}">${esc(status)}</span>`;
@@ -89,7 +98,7 @@ async function showList() {
     <div class="card row">
       <a class="debate-link" href="#${esc(e.id)}">${esc(e.title)}</a>
       <span>
-        <span class="muted">round ${e.round}</span>
+        <span class="muted">round ${esc(String(e.round))}</span>
         ${badge(e.status)}
       </span>
     </div>`).join("");
@@ -105,20 +114,33 @@ function eventCard(ev) {
     </details>`;
 }
 
-async function showDebate(id) {
+function isCurrent(id, generation) {
+  return generation === routeGeneration &&
+    decodeURIComponent(location.hash.slice(1)) === id;
+}
+
+function schedulePoll(id, generation) {
+  if (!isCurrent(id, generation)) return;
+  pollTimer = setTimeout(() => showDebate(id, generation), 3000);
+}
+
+async function showDebate(id, generation) {
   back.hidden = false;
   let state, events;
   try {
     state = await fetchJSON(`/debates/${id}/state.json`);
     events = await fetchJSONL(`/debates/${id}/transcript.jsonl`);
   } catch (e) {
+    if (!isCurrent(id, generation)) return;
     app.innerHTML = `<p class="muted">failed to load ${esc(id)}: ${esc(String(e))}</p>`;
+    schedulePoll(id, generation);
     return;
   }
+  if (!isCurrent(id, generation)) return;
   let html = `
     <div class="card banner row">
       <div><strong>${esc(state.title)}</strong><br>
-        <span class="muted">${esc(id)} · round ${state.round}/${state.max_rounds}</span>
+        <span class="muted">${esc(id)} · round ${esc(String(state.round))}/${esc(String(state.max_rounds))}</span>
       </div>
       ${badge(state.status)}
     </div>`;
@@ -147,14 +169,15 @@ async function showDebate(id) {
   }
   app.innerHTML = html;
   if (state.status === "running") {
-    pollTimer = setTimeout(() => route(), 3000);
+    schedulePoll(id, generation);
   }
 }
 
 function route() {
   clearTimeout(pollTimer);
+  const generation = ++routeGeneration;
   const id = decodeURIComponent(location.hash.slice(1));
-  if (id) showDebate(id); else showList();
+  if (id) showDebate(id, generation); else showList();
 }
 window.addEventListener("hashchange", route);
 route();
