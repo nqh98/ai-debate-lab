@@ -1,0 +1,104 @@
+import json
+
+from debatelab.store import DebateStore, render_summary, slugify
+
+
+def test_slugify():
+    assert slugify("Should we use Rust?!") == "should-we-use-rust"
+    assert slugify("   ") == "debate"
+    assert len(slugify("x" * 100)) <= 40
+
+
+def test_create_makes_files_and_id(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("Pick a DB", "Which database should we use?")
+    d = store.path(did)
+    assert did.endswith("-pick-a-db")
+    assert (d / "problem.md").read_text().startswith("# Pick a DB")
+    assert (d / "transcript.jsonl").exists()
+    state = store.read_state(did)
+    assert state["status"] == "created"
+    assert state["round"] == 0 and state["max_rounds"] == 5
+    assert state["human_decision"] is None
+
+
+def test_create_includes_context(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem", [("notes.md", "some context")])
+    text = store.read_problem(did)
+    assert "## Context: notes.md" in text
+    assert "some context" in text
+
+
+def test_create_collision_gets_suffix(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    a = store.create("Same title", "p")
+    b = store.create("Same title", "p")
+    assert a != b and b.endswith("-2")
+
+
+def test_events_roundtrip_with_ts(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "p")
+    store.append_event(
+        did,
+        {
+            "round": 1,
+            "phase": "propose",
+            "agent": "a",
+            "type": "proposal",
+            "content": "hello",
+        },
+    )
+    events = store.read_events(did)
+    assert len(events) == 1
+    assert events[0]["content"] == "hello"
+    assert "ts" in events[0]
+
+
+def test_state_roundtrip(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "p")
+    state = store.read_state(did)
+    state["status"] = "running"
+    store.write_state(did, state)
+    assert store.read_state(did)["status"] == "running"
+
+
+def test_index_lists_debates(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    a = store.create("First", "p")
+    b = store.create("Second", "p")
+    index = json.loads((tmp_path / "debates" / "index.json").read_text())
+    assert {e["id"] for e in index} == {a, b}
+    assert all(e["status"] == "created" for e in index)
+
+
+def test_render_summary_pending_and_decided():
+    state = {
+        "id": "x",
+        "title": "T",
+        "status": "awaiting_human",
+        "round": 2,
+        "max_rounds": 5,
+        "last_completed_phase": "vote",
+        "proposals": {"a": "prop A"},
+        "critiques": {"b": "crit B"},
+        "candidate": {"agent": "a", "text": "final answer"},
+        "votes": {
+            "a": {"vote": "accept", "reason": "r"},
+            "b": {"vote": "accept", "reason": "r"},
+        },
+        "abstained": ["c"],
+        "human_decision": None,
+    }
+    md = render_summary(state)
+    assert "pending human decision" in md
+    assert "final answer" in md
+    assert "| c | abstained |" in md
+
+    state["human_decision"] = {"decision": "approved", "note": "ship it"}
+    state["status"] = "approved"
+    md = render_summary(state)
+    assert "APPROVED" in md
+    assert "ship it" in md
