@@ -10,6 +10,13 @@ from .agents import registry
 from .store import DebateStore, render_summary
 
 
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 def get_store() -> DebateStore:
     return DebateStore(Path.cwd() / "debates")
 
@@ -71,12 +78,41 @@ def cmd_show(args):
 def cmd_decide(args, decision):
     store = get_store()
     state = store.read_state(args.id)
+    note = args.message or ""
+    decision_events = [
+        event
+        for event in store.read_events(args.id)
+        if event.get("type") == "human_decision"
+    ]
+    if decision_events:
+        recorded = decision_events[0]
+        recorded_decision = recorded.get("content")
+        recorded_note = recorded.get("note", "")
+        if any(
+            event.get("content") != recorded_decision
+            or event.get("note", "") != recorded_note
+            for event in decision_events[1:]
+        ):
+            sys.exit("conflicting human decisions already exist in transcript")
+        if (decision, note) != (recorded_decision, recorded_note):
+            sys.exit(
+                f"debate is already {recorded_decision}; requested decision conflicts"
+            )
+        state["human_decision"] = {
+            "decision": recorded_decision,
+            "note": recorded_note,
+        }
+        state["status"] = recorded_decision
+        store.write_state(args.id, state)
+        store.write_summary(args.id, render_summary(state))
+        store.rebuild_index()
+        print(f"{args.id}: {recorded_decision}")
+        return
     if state["status"] not in ("awaiting_human", "no_consensus"):
         sys.exit(
             f"debate is '{state['status']}' — "
             "nothing is awaiting a human decision"
         )
-    note = args.message or ""
     state["human_decision"] = {"decision": decision, "note": note}
     state["status"] = decision
     store.append_event(
@@ -166,7 +202,7 @@ def main(argv=None):
 
     sp = sub.add_parser("run", help="run debate rounds until consensus or cap")
     sp.add_argument("id")
-    sp.add_argument("--max-rounds", type=int, default=None)
+    sp.add_argument("--max-rounds", type=positive_int, default=None)
     sp.add_argument("--config", default="agents.yaml")
     sp.set_defaults(fn=cmd_run)
 
@@ -210,4 +246,6 @@ def main(argv=None):
     except registry.ConfigError as e:
         sys.exit(f"config error: {e}")
     except FileNotFoundError as e:
+        sys.exit(str(e))
+    except ValueError as e:
         sys.exit(str(e))

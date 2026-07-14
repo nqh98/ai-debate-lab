@@ -36,6 +36,13 @@ vote happens within `--max-rounds` (default 5), the debate ends
 `no_consensus` with all dissents recorded — you still decide with
 approve/reject.
 
+Human decisions are recovered from the append-only `human_decision` transcript
+event. Repeating the same approve/reject command reconciles `state.json`,
+`summary.md`, and the index without adding another event; a conflicting later
+decision is refused. Debate phases checkpoint state only after a phase finishes,
+so phase events emitted before an interruption may be duplicated when that
+uncommitted phase resumes.
+
 ## Watch in the browser
 
 ```bash

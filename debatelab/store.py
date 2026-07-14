@@ -22,6 +22,18 @@ class DebateStore:
         self.root = Path(root)
 
     def path(self, debate_id: str) -> Path:
+        candidate = Path(debate_id)
+        if (
+            not debate_id
+            or debate_id in (".", "..")
+            or candidate.is_absolute()
+            or len(candidate.parts) != 1
+            or "/" in debate_id
+            or "\\" in debate_id
+        ):
+            raise ValueError(
+                f"invalid debate id {debate_id!r}: expected a single directory name"
+            )
         return self.root / debate_id
 
     def create(self, title, problem, context_texts=()) -> str:

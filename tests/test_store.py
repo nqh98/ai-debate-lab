@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from debatelab.store import DebateStore, render_summary, slugify
 
 
@@ -35,6 +37,13 @@ def test_create_collision_gets_suffix(tmp_path):
     a = store.create("Same title", "p")
     b = store.create("Same title", "p")
     assert a != b and b.endswith("-2")
+
+
+@pytest.mark.parametrize("debate_id", ["../outside", "/tmp/outside", "nested/id", "", ".", ".."])
+def test_path_rejects_ids_outside_immediate_root_children(tmp_path, debate_id):
+    store = DebateStore(tmp_path / "debates")
+    with pytest.raises(ValueError, match="invalid debate id"):
+        store.path(debate_id)
 
 
 def test_events_roundtrip_with_ts(tmp_path):

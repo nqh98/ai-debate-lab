@@ -113,3 +113,83 @@ def test_run_needs_two_enabled_agents(workdir, capsys):
     )
     with pytest.raises(SystemExit, match="at least 2"):
         cli.main(["run", debate_id])
+
+
+def test_status_rejects_traversal_id_without_reading_outside_root(workdir):
+    outside = workdir / "outside"
+    outside.mkdir()
+    (outside / "state.json").write_text('{"id": "stolen"}')
+    with pytest.raises(SystemExit, match="invalid debate id"):
+        cli.main(["status", "../outside"])
+
+
+def test_approve_rejects_traversal_id_without_writing_outside_root(workdir):
+    outside = workdir / "outside"
+    outside.mkdir()
+    state_file = outside / "state.json"
+    original = '{"status": "awaiting_human", "round": 0}'
+    state_file.write_text(original)
+    with pytest.raises(SystemExit, match="invalid debate id"):
+        cli.main(["approve", "../outside"])
+    assert state_file.read_text() == original
+    assert not (outside / "transcript.jsonl").exists()
+
+
+def test_max_rounds_must_be_positive(workdir):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", "any-id", "--max-rounds", "0"])
+    assert exc.value.code == 2
+
+
+def test_decision_recovers_after_event_append_interruption(workdir, capsys, monkeypatch):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    real_write_state = DebateStore.write_state
+    interrupted = False
+
+    def interrupt_once(self, did, state):
+        nonlocal interrupted
+        if did == debate_id and state["status"] == "approved" and not interrupted:
+            interrupted = True
+            raise RuntimeError("interrupted after transcript append")
+        real_write_state(self, did, state)
+
+    monkeypatch.setattr(DebateStore, "write_state", interrupt_once)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        cli.main(["approve", debate_id, "-m", "ship it"])
+    assert store.read_state(debate_id)["status"] == "awaiting_human"
+
+    monkeypatch.setattr(DebateStore, "write_state", real_write_state)
+    cli.main(["approve", debate_id, "-m", "ship it"])
+    state = store.read_state(debate_id)
+    assert state["status"] == "approved"
+    assert state["human_decision"] == {"decision": "approved", "note": "ship it"}
+    events = [e for e in store.read_events(debate_id) if e["type"] == "human_decision"]
+    assert len(events) == 1
+    assert set(events[0]) == {
+        "ts", "round", "phase", "agent", "type", "content", "note"
+    }
+    assert events[0]["content"] == "approved"
+    assert events[0]["note"] == "ship it"
+    assert events[0]["round"] == 0
+    assert events[0]["phase"] == "human"
+    assert events[0]["agent"] == "human"
+    assert events[0]["type"] == "human_decision"
+    assert "APPROVED" in store.read_summary(debate_id)
+    index = json.loads((workdir / "debates" / "index.json").read_text())
+    assert index[0]["status"] == "approved"
+
+    cli.main(["approve", debate_id, "-m", "ship it"])
+    assert len([e for e in store.read_events(debate_id) if e["type"] == "human_decision"]) == 1
+    with pytest.raises(SystemExit, match="already approved.*conflicts"):
+        cli.main(["reject", debate_id, "-m", "changed mind"])
+
+
+def test_no_consensus_can_be_decided(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    state = store.read_state(debate_id)
+    state["status"] = "no_consensus"
+    store.write_state(debate_id, state)
+    cli.main(["reject", debate_id, "-m", "insufficient agreement"])
+    assert store.read_state(debate_id)["human_decision"] == {
+        "decision": "rejected", "note": "insufficient agreement"
+    }
