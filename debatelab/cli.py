@@ -1,6 +1,9 @@
 """The `debate` command-line interface."""
 import argparse
+import functools
+import http.server
 import sys
+from importlib import resources
 from pathlib import Path
 
 from .agents import registry
@@ -114,8 +117,40 @@ def cmd_agents(args):
                 print(f"{agent.name}: ping FAILED — {e}")
 
 
+def make_server(port: int, directory: str) -> http.server.ThreadingHTTPServer:
+    viewer_html = (
+        resources.files("debatelab").joinpath("viewer/index.html").read_text()
+    )
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?")[0] in ("/", "/index.html"):
+                body = viewer_html.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                super().do_GET()
+
+        def log_message(self, *args):
+            pass
+
+    handler = functools.partial(Handler, directory=directory)
+    return http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
 def cmd_serve(args):
-    sys.exit("serve: implemented in Task 10")
+    srv = make_server(args.port, str(Path.cwd()))
+    print(
+        f"viewer at http://127.0.0.1:{srv.server_address[1]}/ "
+        "(Ctrl-C to stop)"
+    )
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
 
 
 def main(argv=None):

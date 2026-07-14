@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Debate Lab</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg:#ffffff; --fg:#1a1d23; --muted:#5c6470; --card:#f4f5f7;
+    --line:#e2e4e9; --accent:#3355cc; --ok:#1a7f37; --bad:#b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#12141a; --fg:#e6e8ee; --muted:#9aa1ad; --card:#1c1f27;
+      --line:#2a2e38; --accent:#7a97ff; --ok:#4ade80; --bad:#f87171;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 system-ui,sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { padding:16px 24px; border-bottom:1px solid var(--line);
+           display:flex; align-items:baseline; gap:16px; }
+  header h1 { font-size:18px; margin:0; }
+  header a { color:var(--accent); text-decoration:none; font-size:14px; }
+  main { max-width:980px; margin:0 auto; padding:24px; }
+  .card { background:var(--card); border:1px solid var(--line);
+          border-radius:10px; padding:14px 16px; margin:10px 0; }
+  .row { display:flex; justify-content:space-between; gap:12px;
+         align-items:baseline; flex-wrap:wrap; }
+  .muted { color:var(--muted); font-size:13px; }
+  .badge { font-size:12px; padding:2px 10px; border-radius:999px;
+           border:1px solid var(--line); white-space:nowrap; }
+  .badge.approved, .badge.awaiting_human { color:var(--ok); }
+  .badge.rejected, .badge.error, .badge.no_consensus { color:var(--bad); }
+  .badge.running { color:var(--accent); }
+  a.debate-link { color:var(--fg); text-decoration:none; font-weight:600; }
+  h2 { font-size:16px; margin:26px 0 6px; }
+  h3 { font-size:14px; margin:0 0 6px; color:var(--accent); }
+  pre { white-space:pre-wrap; word-break:break-word; margin:0;
+        font:13px/1.5 ui-monospace,monospace; }
+  details { margin:8px 0; }
+  summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  .vote-accept { color:var(--ok); font-weight:600; }
+  .vote-reject, .vote-abstained { color:var(--bad); font-weight:600; }
+  .banner { border-left:4px solid var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Debate Lab</h1>
+  <a href="#" id="back" hidden>&larr; all debates</a>
+</header>
+<main id="app"><p class="muted">loading…</p></main>
+<script>
+const app = document.getElementById("app");
+const back = document.getElementById("back");
+let pollTimer = null;
+
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s ?? "";
+  return d.innerHTML;
+}
+async function fetchJSON(url) {
+  const r = await fetch(url + "?t=" + Date.now());
+  if (!r.ok) throw new Error(url + " -> " + r.status);
+  return r.json();
+}
+async function fetchJSONL(url) {
+  const r = await fetch(url + "?t=" + Date.now());
+  if (!r.ok) return [];
+  const text = await r.text();
+  return text.split("\n").filter(l => l.trim()).map(l => JSON.parse(l));
+}
+function badge(status) {
+  return `<span class="badge ${esc(status)}">${esc(status)}</span>`;
+}
+
+async function showList() {
+  back.hidden = true;
+  let entries = [];
+  try { entries = await fetchJSON("/debates/index.json"); }
+  catch { app.innerHTML = "<p class='muted'>No debates yet.</p>"; return; }
+  if (!entries.length) {
+    app.innerHTML = "<p class='muted'>No debates yet.</p>";
+    return;
+  }
+  app.innerHTML = entries.map(e => `
+    <div class="card row">
+      <a class="debate-link" href="#${esc(e.id)}">${esc(e.title)}</a>
+      <span>
+        <span class="muted">round ${e.round}</span>
+        ${badge(e.status)}
+      </span>
+    </div>`).join("");
+}
+
+function eventCard(ev) {
+  const label = `${esc(ev.agent ?? "system")} · ${esc(ev.type)}` +
+    (ev.verdict ? ` · <span class="vote-${esc(ev.verdict)}">${esc(ev.verdict)}</span>` : "");
+  return `
+    <details class="card">
+      <summary>${label}</summary>
+      <pre>${esc(ev.content)}</pre>
+    </details>`;
+}
+
+async function showDebate(id) {
+  back.hidden = false;
+  let state, events;
+  try {
+    state = await fetchJSON(`/debates/${id}/state.json`);
+    events = await fetchJSONL(`/debates/${id}/transcript.jsonl`);
+  } catch (e) {
+    app.innerHTML = `<p class="muted">failed to load ${esc(id)}: ${esc(String(e))}</p>`;
+    return;
+  }
+  let html = `
+    <div class="card banner row">
+      <div><strong>${esc(state.title)}</strong><br>
+        <span class="muted">${esc(id)} · round ${state.round}/${state.max_rounds}</span>
+      </div>
+      ${badge(state.status)}
+    </div>`;
+  if (state.human_decision) {
+    html += `<div class="card banner"><h3>Human decision: ${esc(state.human_decision.decision).toUpperCase()}</h3>
+      <pre>${esc(state.human_decision.note || "(no note)")}</pre></div>`;
+  }
+  if (state.candidate) {
+    html += `<h2>Candidate answer (from ${esc(state.candidate.agent)})</h2>
+      <div class="card"><pre>${esc(state.candidate.text)}</pre></div>`;
+  }
+  const votes = Object.entries(state.votes || {});
+  if (votes.length || (state.abstained || []).length) {
+    html += "<h2>Latest votes</h2><div class='card'>" +
+      votes.map(([a, v]) =>
+        `<div>${esc(a)}: <span class="vote-${esc(v.vote)}">${esc(v.vote)}</span></div>`
+      ).join("") +
+      (state.abstained || []).map(a =>
+        `<div>${esc(a)}: <span class="vote-abstained">abstained</span></div>`
+      ).join("") + "</div>";
+  }
+  const rounds = [...new Set(events.map(e => e.round))];
+  for (const r of rounds) {
+    html += `<h2>Round ${esc(String(r))}</h2>`;
+    html += events.filter(e => e.round === r).map(eventCard).join("");
+  }
+  app.innerHTML = html;
+  if (state.status === "running") {
+    pollTimer = setTimeout(() => route(), 3000);
+  }
+}
+
+function route() {
+  clearTimeout(pollTimer);
+  const id = decodeURIComponent(location.hash.slice(1));
+  if (id) showDebate(id); else showList();
+}
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>
