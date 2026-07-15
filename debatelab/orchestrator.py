@@ -186,7 +186,17 @@ class Orchestrator:
             if nominee:
                 nominations[name] = nominee
         order_with_proposals = [n for n in self.order if n in proposals]
-        winner = protocol.select_candidate(nominations, order_with_proposals)
+        winner, was_fallback = protocol.select_candidate(
+            nominations, order_with_proposals, f"{debate_id}:{state['round']}"
+        )
+        if was_fallback:
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "vote", "agent": winner,
+                "type": "fallback_candidate",
+                "content": (
+                    "no valid nominations; candidate chosen by seeded draw"
+                ),
+            })
         state["candidate"] = {"agent": winner, "text": proposals[winner]}
         self.store.append_event(debate_id, {
             "round": state["round"], "phase": "vote", "agent": winner,

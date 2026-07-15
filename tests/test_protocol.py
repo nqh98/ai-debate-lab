@@ -16,18 +16,43 @@ def test_next_phase_after_vote_skips_propose():
     assert protocol.next_phase(3, "vote") == (4, "critique")
 
 
-def test_select_candidate_plurality():
+def test_select_candidate_plurality_wins():
     noms = {"a": "b", "b": "b", "c": "a"}
-    assert protocol.select_candidate(noms, ["a", "b", "c"]) == "b"
+    assert protocol.select_candidate(noms, ["a", "b", "c"], "d:1") == ("b", False)
 
 
-def test_select_candidate_tie_breaks_by_config_order():
+def test_select_candidate_tie_break_is_reproducible():
+    """Same debate + round must always pick the same winner, so a debate
+    stays verifiable by replaying its transcript."""
     noms = {"a": "c", "b": "b"}
-    assert protocol.select_candidate(noms, ["a", "b", "c"]) == "b"
+    first = protocol.select_candidate(noms, ["a", "b", "c"], "d:1")
+    assert first == protocol.select_candidate(noms, ["a", "b", "c"], "d:1")
+    assert first[0] in ("b", "c")
+    assert first[1] is False
 
 
-def test_select_candidate_empty_falls_back_to_first():
-    assert protocol.select_candidate({}, ["a", "b"]) == "a"
+def test_select_candidate_tie_break_is_not_config_order():
+    """Regression: config order used to decide every tie, so the first agent
+    in agents.yaml won structurally."""
+    noms = {"a": "c", "b": "b"}
+    winners = {
+        protocol.select_candidate(noms, ["a", "b", "c"], f"d:{i}")[0]
+        for i in range(20)
+    }
+    assert winners == {"b", "c"}
+
+
+def test_select_candidate_no_nominations_is_a_flagged_fallback():
+    winner, was_fallback = protocol.select_candidate({}, ["a", "b"], "d:1")
+    assert winner in ("a", "b")
+    assert was_fallback is True
+
+
+def test_select_candidate_fallback_is_not_always_the_first_agent():
+    winners = {
+        protocol.select_candidate({}, ["a", "b"], f"d:{i}")[0] for i in range(20)
+    }
+    assert winners == {"a", "b"}
 
 
 def test_check_consensus():

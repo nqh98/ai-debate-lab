@@ -205,3 +205,19 @@ def test_self_nomination_is_dropped_and_recorded(tmp_path):
     dropped = [e for e in store.read_events(did)
                if e["type"] == "nomination_dropped"]
     assert [e["agent"] for e in dropped] == ["a"]
+
+
+def test_zero_valid_nominations_emits_fallback_candidate(tmp_path):
+    """Regression: this used to silently crown agent_order[0]."""
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", ["proposal a", "crit a", "rev a", "no idea",
+                        "VOTE: accept"]),
+        MockAgent("b", ["proposal b", "crit b", "rev b", "dunno",
+                        "VOTE: accept"]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    fallbacks = [e for e in store.read_events(did)
+                 if e["type"] == "fallback_candidate"]
+    assert len(fallbacks) == 1
