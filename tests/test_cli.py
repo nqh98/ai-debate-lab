@@ -1,10 +1,11 @@
 import json
+import shutil
 from contextlib import contextmanager
 from fractions import Fraction
 
 import pytest
 
-from debatelab import cli
+from debatelab import cli, workspace
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
@@ -750,3 +751,47 @@ def test_new_with_repo_pins_workspace(workdir, capsys):
 def test_new_with_bad_repo_exits_with_error(workdir, capsys):
     with pytest.raises(SystemExit):
         cli.main(["new", "problem text", "--repo", str(workdir / "nope")])
+
+
+def write_two_agent_config(tmp_path):
+    p = tmp_path / "agents.yaml"
+    p.write_text(
+        "agents:\n"
+        "  - name: a\n    backend: cli\n    command: [\"echo\", \"{prompt}\"]\n"
+        "  - name: b\n    backend: cli\n    command: [\"echo\", \"{prompt}\"]\n"
+    )
+    return str(p)
+
+
+def test_run_halts_when_workspace_source_is_gone(workdir, capsys):
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    shutil.rmtree(repo)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", did, "--config", write_two_agent_config(workdir)])
+    assert exc.value.code == 3
+    state = json.loads((workdir / "debates" / did / "state.json").read_text())
+    assert state["status"] == "error"
+    events = [
+        json.loads(line)
+        for line in (workdir / "debates" / did / "transcript.jsonl")
+        .read_text().splitlines()
+    ]
+    assert events[-1]["type"] == "error"
+
+
+def test_decision_removes_workspace(workdir, capsys):
+    """approve on a grounded debate tears the worktree down (spec §2)."""
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    debate_dir = workdir / "debates" / did
+    # put the debate into a decidable state without running agents
+    state = json.loads((debate_dir / "state.json").read_text())
+    state["status"] = "awaiting_human"
+    (debate_dir / "state.json").write_text(json.dumps(state))
+    ws = workspace.materialize(state["workspace"], debate_dir)[0]
+    assert ws.exists()
+    cli.main(["approve", did, "-m", "ok"])
+    assert not ws.exists()

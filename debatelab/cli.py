@@ -9,6 +9,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import replay as replay_mod
+from . import workspace as workspace_mod
 from .agents import models, registry
 from .result import build_result, render_final
 from .store import DebateStore, LockError, render_summary
@@ -41,7 +42,6 @@ def cmd_new(args):
     store = get_store()
     workspace = None
     if args.repo:
-        from . import workspace as workspace_mod
         try:
             workspace = workspace_mod.pin(args.repo)
         except workspace_mod.WorkspaceError as e:
@@ -52,6 +52,22 @@ def cmd_new(args):
         contexts.append((p.name, p.read_text()))
     title = args.problem.strip().splitlines()[0][:60]
     print(store.create(title, args.problem, contexts, workspace=workspace))
+
+
+def _halt_workspace(store, debate_id, state, message):
+    """Workspace failure is a halt, same contract as under-quorum: an
+    error event (which replay folds to status error), the checkpoint,
+    and exit 3 — mirroring cmd_run's status == "error" path."""
+    state["status"] = "error"
+    store.append_event(debate_id, {
+        "round": state["round"], "phase": "run", "agent": None,
+        "type": "error", "content": message,
+    })
+    store.write_state(debate_id, state)
+    store.rebuild_index()
+    print(f"workspace error: {message}", flush=True)
+    print("final status: error")
+    sys.exit(3)
 
 
 def cmd_run(args):
@@ -70,6 +86,22 @@ def cmd_run(args):
                     print(f"skipping agent '{spec.name}': {problem}", flush=True)
                     continue
                 ready.append(spec)
+            state = store.read_state(args.id)
+            workspace = state.get("workspace")
+            workdir = None
+            if workspace:
+                try:
+                    workdir, created = workspace_mod.materialize(
+                        workspace, store.path(args.id)
+                    )
+                except workspace_mod.WorkspaceError as e:
+                    _halt_workspace(store, args.id, state, str(e))
+                if created:
+                    store.append_event(args.id, {
+                        "round": state["round"], "phase": "run",
+                        "agent": None, "type": "workspace_ready",
+                        "content": workspace["commit"],
+                    })
             agents = registry.build_agents(ready)
             try:
                 orch = Orchestrator(
@@ -231,6 +263,12 @@ def cmd_decide(args, decision):
             args.id, command=_DECISION_COMMANDS[decision], force=args.force
         ):
             _decide_locked(store, args, decision)
+            state = store.read_state(args.id)
+            workspace = state.get("workspace")
+            if workspace:
+                warning = workspace_mod.remove(workspace, store.path(args.id))
+                if warning:
+                    print(warning, file=sys.stderr)
     except LockError as e:
         # main() does not catch LockError (cli.py:410-417); cmd_run catches it
         # locally for the same reason.
