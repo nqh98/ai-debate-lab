@@ -80,3 +80,54 @@ def test_parse_vote_never_infers_a_verdict_from_prose():
     assert prompts.parse_vote("I accept this fine answer") is None
     assert prompts.parse_vote("hmm not sure about this") is None
     assert prompts.parse_vote("") is None
+
+
+def test_synthesize_prompt_carries_every_proposal_and_critique():
+    p = prompts.synthesize_prompt(
+        "alpha",
+        "Q",
+        {"alpha": "A's idea", "beta": "B's idea"},
+        {"alpha": "A's critique", "beta": "B's critique"},
+    )
+    assert prompts.SYNTHESIS_HEADER in p
+    assert "A's idea" in p and "B's idea" in p
+    assert "A's critique" in p and "B's critique" in p
+    assert "### alpha" in p and "### beta" in p
+
+
+def test_synthesize_prompt_includes_reject_reasons_when_given():
+    p = prompts.synthesize_prompt(
+        "alpha", "Q", {"alpha": "A"}, {"beta": "C"}, {"gamma": "too vague"}
+    )
+    assert "too vague" in p
+    p2 = prompts.synthesize_prompt("alpha", "Q", {"alpha": "A"}, {"beta": "C"})
+    assert "too vague" not in p2
+    assert "rejected" not in p2.lower()
+
+
+def test_synthesize_prompt_forbids_a_preamble():
+    """The reply is published verbatim as the answer, so the prompt must ban
+    the "Changes:" section revise_prompt asks for. See spec §3."""
+    p = prompts.synthesize_prompt("alpha", "Q", {"alpha": "A"}, {"beta": "C"})
+    assert "Changes:" in p
+    assert "answer ONLY" in p
+
+
+def test_synthesize_prompt_asks_for_a_merge_not_a_defence():
+    p = prompts.synthesize_prompt("alpha", "Q", {"alpha": "A"}, {"beta": "C"})
+    assert "merg" in p.lower()
+    assert "Do not simply restate your own proposal." in p
+
+
+def test_synthesize_prompt_is_detectable_by_its_header():
+    """conftest.MockAgent routes on this substring, and no other prompt may
+    collide with it."""
+    others = [
+        prompts.propose_prompt("a", "Q"),
+        prompts.critique_prompt("a", "Q", {"b": "B"}),
+        prompts.revise_prompt("a", "Q", "own", {"b": "B"}),
+        prompts.nominate_prompt("a", "Q", {"a": "A", "b": "B"}, ["a", "b"]),
+        prompts.vote_prompt("a", "Q", "b", "B"),
+    ]
+    for p in others:
+        assert prompts.SYNTHESIS_HEADER not in p

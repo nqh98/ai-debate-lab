@@ -5,6 +5,10 @@ import re
 
 VOTE_REQUIRED = "'VOTE: accept' or 'VOTE: reject'"
 NOMINATE_REQUIRED = "'NOMINATE: <agent-name>'"
+# Part of the prompt's contract, not a test hook: the synthesize call is the
+# only one addressed to a single agent, so this header is how a reader (and
+# tests/conftest.py's MockAgent) tells a synthesis prompt from the others.
+SYNTHESIS_HEADER = "Proposals to merge:"
 
 
 def format_blocks(items: dict[str, str]) -> str:
@@ -90,6 +94,46 @@ def vote_prompt(
         f"{candidate_text}\n\n"
         "Do you accept this as the final answer? Reply with exactly one "
         "line, then your reasoning:\nVOTE: accept\nor\nVOTE: reject"
+    )
+
+
+def synthesize_prompt(
+    name: str,
+    problem: str,
+    proposals: dict[str, str],
+    critiques: dict[str, str],
+    reject_reasons: dict[str, str] | None = None,
+) -> str:
+    """Ask the nomination winner to merge the roster's work into one answer.
+
+    Deliberately not revise_prompt: that hands one agent its OWN proposal and
+    asks it to defend it. This hands the winner EVERY proposal and asks for a
+    merge. The instruction not to restate its own proposal is load-bearing --
+    without it the winner re-emits its proposal and the phase costs a DEEP
+    call to reproduce the status quo.
+
+    The reply is published verbatim as the answer, so there is no marker to
+    parse and the prompt must ban the "Changes:" preamble revise_prompt asks
+    for. See specs/2026-07-15-synthesis-phase-design.md §3.
+    """
+    extra = ""
+    if reject_reasons:
+        extra = (
+            "\n\nThe roster rejected the previous answer for these reasons:\n"
+            + format_blocks(reject_reasons)
+        )
+    return (
+        f'You are agent "{name}" in a structured multi-agent debate.\n'
+        "The other agents nominated your proposal, so you draft the final "
+        "answer.\n\n"
+        f"Problem:\n{problem}\n\n"
+        f"{SYNTHESIS_HEADER}\n{format_blocks(proposals)}\n\n"
+        f"Critiques from all agents:\n{format_blocks(critiques)}{extra}\n\n"
+        "Write the single best answer to the problem. Merge the strongest "
+        "reasoning from every proposal above and address the critiques. "
+        "Do not simply restate your own proposal.\n\n"
+        'Reply with the answer ONLY. No preamble, no "Changes:" section, no '
+        "commentary about the debate or about what you merged."
     )
 
 
