@@ -26,14 +26,15 @@ def build_result(
             reason = "debate has not produced a candidate yet"
         elif event_type == "run_config":
             status = "running"
-            candidate = None
-            candidate_text = None
             tally = None
             decided_at = None
             note = None
             round_ = None
             failed_phase = None
             reason = "debate has not produced a candidate yet"
+            if event.get("loaded_status") != "running":
+                candidate = None
+                candidate_text = None
         elif event_type == "candidate":
             candidate = {"agent": event.get("agent"), "round": event.get("round")}
             candidate_text = event.get("content")
@@ -69,12 +70,12 @@ def build_result(
             status = event.get("content")
             decided_at = event.get("ts")
             note = event.get("note", "")
-            if status == "approved":
-                reason = None
-            elif status == "rejected":
+            if status == "rejected":
                 reason = note or "rejected without a note"
 
     answer = candidate_text if status == "approved" else None
+    if status == "approved":
+        reason = None if answer is not None else "approved without a candidate"
     return {
         "id": debate_id,
         "title": title,

@@ -133,10 +133,36 @@ def test_result_requires_an_answer_even_when_the_result_is_approved(workdir, cap
     capsys.readouterr()
 
     with pytest.raises(SystemExit) as exc:
+        cli.main(["result", debate_id, "--json"])
+
+    assert exc.value.code == 1
+    decision_event = next(
+        event for event in store.read_events(debate_id)
+        if event["type"] == "human_decision"
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "id": debate_id,
+        "title": "Topic",
+        "status": "approved",
+        "answer": None,
+        "candidate": None,
+        "tally": None,
+        "decided_at": decision_event["ts"],
+        "note": "",
+        "reason": "approved without a candidate",
+        "round": 1,
+        "failed_phase": None,
+    }
+
+    with pytest.raises(SystemExit) as exc:
         cli.main(["result", debate_id])
 
     assert exc.value.code == 1
-    assert "# No answer" in capsys.readouterr().out
+    assert capsys.readouterr().out == (
+        "# No answer\n\n"
+        "approved without a candidate\n\n"
+        "The full debate is in `summary.md`.\n"
+    )
 
 
 def test_result_reads_a_pre_genesis_transcript_without_error(workdir, capsys):
@@ -157,7 +183,15 @@ def test_result_reads_a_pre_genesis_transcript_without_error(workdir, capsys):
 
 @pytest.mark.parametrize(
     ("status", "exit_code"),
-    [("awaiting_human", None), ("no_consensus", 1), ("error", 3)],
+    [
+        ("awaiting_human", None),
+        ("no_consensus", 1),
+        ("error", 3),
+        ("approved", 1),
+        ("rejected", 1),
+        ("created", 1),
+        ("running", 1),
+    ],
 )
 def test_run_uses_terminal_status_exit_codes(
     workdir, capsys, monkeypatch, status, exit_code
@@ -184,6 +218,35 @@ def test_run_uses_terminal_status_exit_codes(
         with pytest.raises(SystemExit) as exc:
             cli.main(["run", debate_id])
         assert exc.value.code == exit_code
+
+
+@pytest.mark.parametrize("status", ["approved", "rejected"])
+def test_run_exits_one_for_a_predecided_debate(
+    workdir, capsys, monkeypatch, status
+):
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("Topic", "problem")
+    state = store.read_state(debate_id)
+    state["status"] = status
+    store.write_state(debate_id, state)
+
+    class FakeOrchestrator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            return status
+
+    monkeypatch.setattr(cli, "get_store", lambda: store)
+    monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    from debatelab import orchestrator
+    monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", debate_id])
+
+    assert exc.value.code == 1
 
 
 def test_decide_and_reconciliation_regenerate_all_derived_views(workdir, capsys):

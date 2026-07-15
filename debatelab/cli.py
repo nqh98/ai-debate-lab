@@ -83,10 +83,10 @@ def cmd_run(args):
             f"review with `debate show {args.id}`, then "
             f"`debate approve {args.id}` or `debate reject {args.id} -m ...`"
         )
-    if status == "no_consensus":
-        sys.exit(1)
     if status == "error":
         sys.exit(3)
+    if status != "awaiting_human":
+        sys.exit(1)
 
 
 def _status_line(state):

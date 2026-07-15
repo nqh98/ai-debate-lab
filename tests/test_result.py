@@ -141,6 +141,21 @@ def test_approval_after_no_consensus_promotes_current_run_candidate_text():
     assert result["candidate"] == {"agent": "claude", "round": 2}
 
 
+def test_resume_running_preserves_candidate_for_later_approval():
+    result = build_result([
+        created(),
+        event("run_config", phase="run", loaded_status="created"),
+        event("candidate", round=2, agent="claude", content="fallback plan"),
+        event("run_config", phase="run", loaded_status="running"),
+        event("no_consensus", round=2, content="no quorum"),
+        decision("approved"),
+    ])
+
+    assert result["status"] == "approved"
+    assert result["answer"] == "fallback plan"
+    assert result["candidate"] == {"agent": "claude", "round": 2}
+
+
 def test_new_run_and_terminal_outcomes_clear_stale_result_fields():
     result = build_result([
         created(),
