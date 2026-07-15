@@ -96,9 +96,15 @@ def _is_stale(holder: dict) -> bool:
 
 
 @contextlib.contextmanager
-def _lock_transition(debate_path: Path):
-    """Serialize lock acquisition, takeover, and release for one debate."""
-    fd = os.open(debate_path, os.O_RDONLY)
+def _dir_lock(path: Path):
+    """Serialize a check-then-act against everything under `path`.
+
+    flock on a directory fd. The kernel releases it when the holder dies, so
+    unlike the debate lock there is nothing stale to detect and nothing to
+    force: this guards sections measured in milliseconds, where a competing
+    process should block rather than be refused.
+    """
+    fd = os.open(path, os.O_RDONLY)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
@@ -238,23 +244,28 @@ class DebateStore:
         return sorted(debate_ids)
 
     def rebuild_index(self):
-        entries = []
-        for did in self.list_ids():
-            state = self.read_state(did)
-            entries.append(
-                {
-                    "id": did,
-                    "title": state["title"],
-                    "status": state["status"],
-                    "round": state["round"],
-                }
+        # mkdir above the lock, not inside it: _dir_lock opens the directory
+        # to get an fd, and rebuild_index is reachable before debates/ exists.
+        self.root.mkdir(parents=True, exist_ok=True)
+        with _dir_lock(self.root):
+            entries = []
+            for did in self.list_ids():
+                state = self.read_state(did)
+                entries.append(
+                    {
+                        "id": did,
+                        "title": state["title"],
+                        "status": state["status"],
+                        "round": state["round"],
+                    }
+                )
+            _atomic_write(
+                self.root / "index.json", json.dumps(entries, indent=2)
             )
-        self.root.mkdir(exist_ok=True)
-        _atomic_write(self.root / "index.json", json.dumps(entries, indent=2))
 
     def _acquire_lock(self, path: Path, info: dict, force: bool) -> None:
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        with _lock_transition(path.parent):
+        with _dir_lock(path.parent):
             try:
                 fd = os.open(path, flags)
             except FileExistsError:
@@ -276,7 +287,7 @@ class DebateStore:
                 json.dump(info, lock_file)
 
     def _release_lock(self, path: Path, run_id: str) -> None:
-        with _lock_transition(path.parent):
+        with _dir_lock(path.parent):
             if _read_lock(path).get("run_id") == run_id:
                 path.unlink(missing_ok=True)
 

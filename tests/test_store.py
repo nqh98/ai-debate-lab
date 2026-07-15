@@ -286,3 +286,66 @@ def test_concurrent_appends_never_interleave(tmp_path):
     events = store.read_events(did)
     assert len(events) == 201
     assert all(e["content"] == "x" * 500 for e in events[1:])
+
+
+def test_rebuild_index_creates_the_root_when_it_does_not_exist(tmp_path):
+    """_dir_lock needs an fd, so the mkdir must happen before the lock rather
+    than after the scan. Passes today; it exists to fail loudly if the lock is
+    wrapped around the whole body verbatim."""
+    store = DebateStore(tmp_path / "debates")
+    store.rebuild_index()
+    assert json.loads((tmp_path / "debates" / "index.json").read_text()) == []
+
+
+def test_rebuild_index_serializes_concurrent_rebuilds(tmp_path, monkeypatch):
+    """Two rebuilds must not overlap: one that scans while another is between
+    its own scan and write will write a stale index over a fresh one."""
+    store = DebateStore(tmp_path / "debates")
+    store.create("A", "problem")
+
+    inside = threading.Event()
+    release = threading.Event()
+    real_list_ids = store.list_ids
+    calls = []
+
+    def list_ids_first_call_blocks():
+        ids = real_list_ids()
+        calls.append(1)
+        if len(calls) == 1:  # only the first rebuild stalls in the section
+            inside.set()
+            assert release.wait(5), "test deadlocked waiting to release"
+        return ids
+
+    monkeypatch.setattr(store, "list_ids", list_ids_first_call_blocks)
+
+    first = threading.Thread(target=store.rebuild_index)
+    first.start()
+    assert inside.wait(5), "first rebuild never entered the critical section"
+
+    second = threading.Thread(target=store.rebuild_index)
+    second.start()
+    second.join(timeout=0.3)
+    blocked = second.is_alive()
+
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert blocked, "second rebuild ran while the first held the root lock"
+
+
+def test_root_lock_does_not_block_on_an_unrelated_debate_lock(tmp_path):
+    """The root and a debate directory are different inodes, so the two locks
+    cannot form an ordering cycle. This is spec section 1's argument, executable."""
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("A", "problem")
+    done = threading.Event()
+
+    def rebuild():
+        store.rebuild_index()
+        done.set()
+
+    with store_mod._dir_lock(store.path(did)):
+        t = threading.Thread(target=rebuild)
+        t.start()
+        assert done.wait(5), "rebuild_index blocked on an unrelated debate lock"
+        t.join(5)
