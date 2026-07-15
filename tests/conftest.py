@@ -3,6 +3,7 @@ import pytest
 from debatelab import orchestrator
 from debatelab.agents import models
 from debatelab.agents.base import Agent, AgentError
+from debatelab.store import DebateStore
 
 
 @pytest.fixture(autouse=True)
@@ -29,3 +30,17 @@ class MockAgent(Agent):
         if isinstance(item, Exception):
             raise item
         return item
+
+
+def make_store(tmp_path):
+    return DebateStore(tmp_path / "debates")
+
+
+def happy_agent(name, nominee="a"):
+    return MockAgent(name, [
+        f"proposal from {name}",
+        f"critique from {name}",
+        f"revised proposal from {name}",
+        f"NOMINATE: {nominee}\nbest one",
+        "VOTE: accept\nagreed",
+    ])

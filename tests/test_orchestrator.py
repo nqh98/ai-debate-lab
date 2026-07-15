@@ -8,21 +8,7 @@ from debatelab import prompts, protocol
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
-from .conftest import MockAgent
-
-
-def make_store(tmp_path):
-    return DebateStore(tmp_path / "debates")
-
-
-def happy_agent(name, nominee="a"):
-    return MockAgent(name, [
-        f"proposal from {name}",
-        f"critique from {name}",
-        f"revised proposal from {name}",
-        f"NOMINATE: {nominee}\nbest one",
-        "VOTE: accept\nagreed",
-    ])
+from .conftest import MockAgent, happy_agent, make_store
 
 
 class DeadAgent(Agent):
