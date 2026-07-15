@@ -122,7 +122,9 @@ Instead, stderr is captured **verbatim** in telemetry (§5). If real runs show a
 
 ### 4. Backoff (`debatelab/retry.py`, new)
 
-A new module, pure in the same sense `protocol.py` is pure: no files, no network, no clock of its own, no knowledge of agents or debates. The clock is injected.
+A new module, pure in the sense that matters: no files, no network, no knowledge of debates or the store. The *pacing* clock and the RNG are injected.
+
+Two dependencies are deliberate rather than sloppy. It imports `AgentError` to read `.retryable` — it cannot pace what it cannot classify. And it calls `time.monotonic` to measure attempt duration for telemetry: measuring elapsed time is not the same as controlling pacing, and faking it would buy nothing, since a test asserting `duration_ms >= 0` needs no injected clock.
 
 ```python
 DEFAULT_MAX_ATTEMPTS = 3      # the original call plus 2 retries
@@ -194,11 +196,15 @@ Both call sites route through `call_with_retry`, replacing the hand-rolled doubl
 `Orchestrator.__init__` gains `sleep=None` and `rng=None` as injected dependencies, mirroring the existing `progress` callback, resolved in the body:
 
 ```python
-self.sleep = sleep or time.sleep
-self.rng = rng or random.Random()
+DEFAULT_SLEEP = time.sleep          # module level
+
+    self.sleep = sleep or DEFAULT_SLEEP
+    self.rng = rng or random.Random()
 ```
 
-Resolved in the body, **not** as default argument values. Default arguments bind once at definition, which would freeze a reference to the real `time.sleep` before any test could patch it — see §7.
+Resolved in the body, **not** as default argument values: defaults bind once at definition and would freeze a reference to the real `time.sleep` before any test could reach it.
+
+The indirection through a module-level `DEFAULT_SLEEP` is what lets §7's fixture neutralize backoff by patching one name in one module, instead of monkeypatching the global `time.sleep` and hoping nothing else in the process — the HTTP test server, the thread pool — depended on it.
 
 Nothing else moves. `DebateHalted`, the quorum check, the abstention path, and `protocol.py` are untouched — retries reduce how often abstentions happen without changing what an abstention means.
 
@@ -212,10 +218,12 @@ Nothing else moves. `DebateHalted`, the quorum check, the abstention path, and `
   ```python
   @pytest.fixture(autouse=True)
   def no_real_sleep(monkeypatch):
-      monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+      monkeypatch.setattr(orchestrator, "DEFAULT_SLEEP", lambda _seconds: None)
   ```
 
-  This requires `Orchestrator` to resolve `time.sleep` at call time (`self.sleep = sleep or time.sleep` in `__init__`) rather than as a default argument value, since default arguments are bound at definition and would not see the patch. Tests that assert on delays inject a recording fake explicitly and ignore the fixture; `call_with_retry` takes `sleep` as a required keyword, so its own unit tests can never sleep by accident.
+  It patches the orchestrator's own indirection rather than the global `time.sleep`, so nothing else in the process is affected — the suite runs a live `HTTPServer` and a thread pool, and neutering the interpreter's clock for all of them to speed up one module is a blast radius with no upside.
+
+  Tests that assert on delays inject a recording fake explicitly via `Orchestrator(sleep=...)` and ignore the fixture; `call_with_retry` takes `sleep` as a required keyword, so its own unit tests can never sleep by accident.
 - Transcripts predating this spec simply lack `agent_call` events. Nothing reads them yet.
 
 ## Testing
