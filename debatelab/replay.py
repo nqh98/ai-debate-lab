@@ -75,12 +75,6 @@ def _run_config(st, e):
 def _phase_started(st, e):
     st["round"] = e["round"]          # mirrors orchestrator.py:67
     st["abstained"] = []              # mirrors orchestrator.py:68
-    # Replace, not merge: orchestrator.py:212 and :326 assign wholesale, so an
-    # agent that participated last round and abstained this one must vanish.
-    if e["phase"] == "critique":
-        st["critiques"] = {}
-    elif e["phase"] == "vote":
-        st["votes"] = {}
 
 
 def _phase_completed(st, e):
@@ -153,6 +147,10 @@ def replay(events):
             "pre-genesis debate"
         )
     st = _initial()
+    # Critique and vote replace their dictionaries only after their fanouts
+    # complete. Reset lazily on the first emitted result, so a later halted
+    # phase preserves the prior round's dictionary just like Orchestrator.
+    reset_results = set()
     for e in events:
         kind = e.get("type")
         if kind in AUDIT_ONLY:
@@ -160,5 +158,10 @@ def replay(events):
         fold = _FOLD.get(kind)
         if fold is None:
             raise UnknownEvent(f"no fold rule for event type {kind!r}")
+        if kind in ("critique", "vote"):
+            result_key = (kind, e["round"], e["phase"])
+            if result_key not in reset_results:
+                st[f"{kind}s"] = {}
+                reset_results.add(result_key)
         fold(st, e)
     return st

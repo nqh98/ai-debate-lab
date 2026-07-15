@@ -105,8 +105,8 @@ def cmd_show(args):
     print(get_store().read_summary(args.id) or "(no summary yet)")
 
 
-# The events after which run() checkpoints: state.json equals the replay of
-# the transcript up to the last of these, and nothing later.
+# Events that can describe a checkpoint, although each is appended before its
+# state.json write completes.
 _BOUNDARY_TYPES = frozenset({
     "phase_completed", "consensus", "no_consensus", "error", "human_decision",
 })
@@ -120,28 +120,37 @@ def _brief(value, limit=70):
 def cmd_fsck(args):
     """Check state.json against a replay of the transcript.
 
-    state.json is the last checkpoint, not the latest truth: _checkpoint runs
-    at phase boundaries, while per-agent events land as futures complete. A
-    hard crash therefore leaves events after the last checkpoint, and those
-    are SUPPOSED to be absent from state.json. Comparing a total replay
-    against it would report divergence on exactly the crashed debates this
-    command exists to inspect — so compare the prefix up to the last
-    boundary, and report the rest as in flight.
+    state.json is the last checkpoint, not the latest truth. Boundary events
+    are appended before their corresponding checkpoint write, so a hard crash
+    can leave even a boundary event beyond state.json. Search backward for the
+    newest boundary prefix that matches state.json and report later events as
+    in flight.
     """
     store = get_store()
     events = store.read_events(args.id)
     state = store.read_state(args.id)
-    boundary = 0
-    for i, event in enumerate(events):
-        if event.get("type") in _BOUNDARY_TYPES:
-            boundary = i
     try:
-        expected = replay_mod.replay(events[: boundary + 1])
+        replay_mod.replay(events[:1])
     except replay_mod.MissingGenesis as e:
         print(f"{args.id}: unverifiable — {e}")
         sys.exit(3)
-    in_flight = len(events) - (boundary + 1)
-    if expected == state:
+
+    boundaries = [0] + [
+        i for i, event in enumerate(events)
+        if event.get("type") in _BOUNDARY_TYPES
+    ]
+    latest_expected = None
+    matching_boundary = None
+    for boundary in reversed(boundaries):
+        expected = replay_mod.replay(events[: boundary + 1])
+        if latest_expected is None:
+            latest_expected = expected
+        if expected == state:
+            matching_boundary = boundary
+            break
+
+    if matching_boundary is not None:
+        in_flight = len(events) - (matching_boundary + 1)
         note = ""
         if in_flight:
             plural = "s" if in_flight != 1 else ""
@@ -151,12 +160,23 @@ def cmd_fsck(args):
             )
         print(f"{args.id}: ok{note}")
         return
+
+    expected = latest_expected
     print(f"{args.id}: diverged")
+    missing = object()
     for key in sorted(set(expected) | set(state)):
-        if expected.get(key) != state.get(key):
+        state_value = state.get(key, missing)
+        replay_value = expected.get(key, missing)
+        if state_value != replay_value:
             print(f"  {key}:")
-            print(f"    state.json: {_brief(state.get(key))}")
-            print(f"    replay    : {_brief(expected.get(key))}")
+            state_text = (
+                "<missing>" if state_value is missing else _brief(state_value)
+            )
+            replay_text = (
+                "<missing>" if replay_value is missing else _brief(replay_value)
+            )
+            print(f"    state.json: {state_text}")
+            print(f"    replay    : {replay_text}")
     sys.exit(1)
 
 

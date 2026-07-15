@@ -396,6 +396,38 @@ def test_fsck_notes_events_in_flight_after_the_last_checkpoint(
     assert "1 event in flight" in out
 
 
+def test_fsck_accepts_a_phase_completed_after_the_current_checkpoint(
+    workdir, capsys
+):
+    store, did = _run_a_debate(workdir)
+    store.append_event(did, {
+        "round": 2, "phase": "critique", "agent": None,
+        "type": "phase_started", "content": "",
+    })
+    store.append_event(did, {
+        "round": 2, "phase": "critique", "agent": None,
+        "type": "phase_completed", "content": "",
+    })
+    cli.main(["fsck", did])
+    out = capsys.readouterr().out.strip()
+    assert out.startswith(f"{did}: ok")
+    assert "2 events in flight" in out
+
+
+def test_fsck_accepts_a_human_decision_after_the_current_checkpoint(
+    workdir, capsys
+):
+    store, did = _run_a_debate(workdir)
+    store.append_event(did, {
+        "round": 1, "phase": "human", "agent": "human",
+        "type": "human_decision", "content": "approved", "note": "ship it",
+    })
+    cli.main(["fsck", did])
+    out = capsys.readouterr().out.strip()
+    assert out.startswith(f"{did}: ok")
+    assert "1 event in flight" in out
+
+
 def test_fsck_reports_diverged_and_names_the_key(workdir, capsys):
     store, did = _run_a_debate(workdir)
     state = store.read_state(did)
@@ -408,6 +440,19 @@ def test_fsck_reports_diverged_and_names_the_key(workdir, capsys):
     assert f"{did}: diverged" in out
     assert "status" in out
     assert "awaiting_human" in out
+
+
+def test_fsck_reports_a_missing_nullable_key(workdir, capsys):
+    store, did = _run_a_debate(workdir)
+    state = store.read_state(did)
+    del state["human_decision"]
+    store.write_state(did, state)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["fsck", did])
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "human_decision" in out
+    assert "<missing>" in out
 
 
 def test_fsck_reports_unverifiable_on_a_pre_genesis_debate(workdir, capsys):

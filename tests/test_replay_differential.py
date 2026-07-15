@@ -128,6 +128,58 @@ def test_agrees_across_rounds_when_an_agent_drops_out(tmp_path):
     assert_agrees(store, did)
 
 
+def test_agrees_after_a_later_round_critique_halt(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "crit a2",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: a", "VOTE: reject\nno",
+        ]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=2)
+    state = store.read_state(did)
+    assert state["status"] == "error"
+    assert state["critiques"] == {
+        "a": "crit a", "b": "crit b", "c": "crit c",
+    }
+    assert_agrees(store, did)
+
+
+def test_agrees_after_a_later_round_vote_halt(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "crit a2", "rev a2", "NOMINATE: b",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+            "crit b2", "rev b2",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: a", "VOTE: reject\nno",
+            "crit c2", "rev c2",
+        ]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=2)
+    state = store.read_state(did)
+    assert state["status"] == "error"
+    assert state["votes"] == {
+        "a": {"vote": "reject", "reason": "VOTE: reject\nno"},
+        "b": {"vote": "reject", "reason": "VOTE: reject\nno"},
+        "c": {"vote": "reject", "reason": "VOTE: reject\nno"},
+    }
+    assert_agrees(store, did)
+
+
 def test_agrees_when_a_self_nomination_is_dropped(tmp_path):
     """nomination_dropped is audit-only; the fold must not react to it."""
     store = make_store(tmp_path)

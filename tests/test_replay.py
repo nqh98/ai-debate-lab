@@ -136,6 +136,18 @@ def test_critiques_reset_at_each_critique_phase():
     assert state["critiques"] == {"a": "c3"}
 
 
+def test_a_halted_later_critique_keeps_the_prior_round_critiques():
+    """The orchestrator replaces critiques only after its fanout succeeds."""
+    state = replay.replay([
+        genesis(),
+        ev("phase_started", round=1, phase="critique"),
+        ev("critique", round=1, phase="critique", agent="a", content="c1"),
+        ev("phase_started", round=2, phase="critique"),
+        ev("abstained", round=2, phase="critique", agent="b", content="boom"),
+    ])
+    assert state["critiques"] == {"a": "c1"}
+
+
 def test_votes_reset_at_each_vote_phase():
     state = replay.replay([
         genesis(),
@@ -147,6 +159,19 @@ def test_votes_reset_at_each_vote_phase():
            content="no"),
     ])
     assert state["votes"] == {"b": {"vote": "reject", "reason": "no"}}
+
+
+def test_a_halted_later_vote_keeps_the_prior_round_votes():
+    """The orchestrator replaces votes only after its vote fanout succeeds."""
+    state = replay.replay([
+        genesis(),
+        ev("phase_started", round=1, phase="vote"),
+        ev("vote", round=1, phase="vote", agent="a", verdict="accept",
+           content="yes"),
+        ev("phase_started", round=2, phase="vote"),
+        ev("abstained", round=2, phase="vote", agent="b", content="boom"),
+    ])
+    assert state["votes"] == {"a": {"vote": "accept", "reason": "yes"}}
 
 
 def test_abstained_resets_every_phase_not_every_round():
