@@ -860,3 +860,52 @@ def test_synthesize_prompt_gets_reject_reasons_from_the_last_round(tmp_path):
     assert len(synth_prompts) == 2
     assert "too vague" in synth_prompts[1]
     assert "too vague" not in synth_prompts[0]
+
+
+def test_agent_call_events_carry_the_resolved_model(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [happy_agent("a"), happy_agent("b")]
+    for agent in agents:
+        agent.model = "test-model-1"
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    calls = [
+        e for e in store.read_events(did)
+        if e["type"] == "agent_call" and e["ok"]
+    ]
+    assert calls
+    assert all(e["model"] == "test-model-1" for e in calls)
+
+
+def test_agent_call_records_a_null_model_rather_than_dropping_the_key(tmp_path):
+    """null is the claim 'the backend routed itself'. An absent key would make
+    that indistinguishable from 'this adapter never reported', which is the
+    ambiguity the field is built to avoid."""
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=1
+    )
+    calls = [
+        e for e in store.read_events(did)
+        if e["type"] == "agent_call" and e["ok"]
+    ]
+    assert calls
+    assert all("model" in e for e in calls)
+    assert all(e["model"] is None for e in calls)
+
+
+def test_failed_agent_call_omits_the_model_key(tmp_path):
+    """AgentError does not know the model, and guessing one would be worse
+    than the absence. This is the only case where absence is correct."""
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(
+        store, [happy_agent("a"), happy_agent("b"), MockAgent("c", [])]
+    ).run(did, max_rounds=1)
+    failed = [
+        e for e in store.read_events(did)
+        if e["type"] == "agent_call" and not e["ok"]
+    ]
+    assert failed
+    assert all("model" not in e for e in failed)

@@ -179,7 +179,7 @@ class Orchestrator:
 
     def _record_call(self, debate_id, state, phase, name, task):
         """Build the on_attempt hook that logs one agent_call per attempt."""
-        def on_attempt(attempt, duration_ms, error):
+        def on_attempt(attempt, duration_ms, error, reply):
             event = {
                 "round": state["round"], "phase": phase, "agent": name,
                 "type": "agent_call", "task": task, "attempt": attempt,
@@ -187,8 +187,15 @@ class Orchestrator:
                 "content": "",
             }
             if error is not None:
+                # No model: AgentError does not carry one, and attaching it at
+                # the raise sites in _request would be instrumenting the error
+                # path for a question nobody has asked. `kind` covers why.
                 event["kind"] = error.kind.value
                 event["content"] = str(error)
+            else:
+                # Always set, even when None: null is the claim "the backend
+                # routed itself", not an absence.
+                event["model"] = reply.model
             self.store.append_event(debate_id, event)
 
         return on_attempt
@@ -201,7 +208,7 @@ class Orchestrator:
         Re-asks run serially because they are rare, cheap FAST requests.
         """
         try:
-            text = retry.call_with_retry(
+            reply = retry.call_with_retry(
                 lambda: self.agents[name].ask(
                     prompts.reask(prompt, required), task
                 ),
@@ -213,7 +220,7 @@ class Orchestrator:
             )
         except AgentError:
             return None, None
-        return parse(text), text
+        return parse(reply.text), reply.text
 
     @staticmethod
     def _reject_reasons(state):
@@ -233,7 +240,7 @@ class Orchestrator:
         as a value. See specs/2026-07-15-synthesis-phase-design.md §5.
         """
         try:
-            text = retry.call_with_retry(
+            reply = retry.call_with_retry(
                 lambda: self.agents[name].ask(prompt, task),
                 rng=self.rng,
                 sleep=self.sleep,
@@ -243,7 +250,7 @@ class Orchestrator:
             )
         except AgentError as e:
             return None, str(e)
-        return text, None
+        return reply.text, None
 
     def _fanout(self, debate_id, state, phase, prompt_for,
                 task=models.DEEP) -> dict:
@@ -252,7 +259,7 @@ class Orchestrator:
 
         def call(name):
             prompt = prompt_for(name)
-            return retry.call_with_retry(
+            reply = retry.call_with_retry(
                 lambda: self.agents[name].ask(prompt, task),
                 rng=self.rng,
                 sleep=self.sleep,
@@ -260,6 +267,7 @@ class Orchestrator:
                     debate_id, state, phase, name, task
                 ),
             )
+            return reply.text
 
         with cf.ThreadPoolExecutor(max_workers=len(self.order)) as ex:
             futures = {ex.submit(call, name): name for name in self.order}

@@ -163,7 +163,7 @@ def test_on_attempt_fires_for_every_attempt_with_the_outcome():
         flaky,
         rng=random.Random(0),
         sleep=clock,
-        on_attempt=lambda attempt, ms, err: seen.append((attempt, err)),
+        on_attempt=lambda attempt, ms, err, result: seen.append((attempt, err)),
     )
     assert [attempt for attempt, _ in seen] == [1, 2]
     assert seen[0][1].kind is ErrorKind.SERVER_ERROR
@@ -176,7 +176,7 @@ def test_on_attempt_reports_a_non_negative_duration():
         lambda: "ok",
         rng=random.Random(0),
         sleep=Clock(),
-        on_attempt=lambda attempt, ms, err: seen.append(ms),
+        on_attempt=lambda attempt, ms, err, result: seen.append(ms),
     )
     assert isinstance(seen[0], int)
     assert seen[0] >= 0
@@ -187,3 +187,26 @@ def test_non_agent_errors_are_not_swallowed():
     with pytest.raises(ZeroDivisionError):
         retry.call_with_retry(lambda: 1 / 0, rng=random.Random(0), sleep=clock)
     assert clock.slept == []
+
+
+def test_on_attempt_receives_the_result_on_success_and_none_on_failure():
+    """The event is built in on_attempt, so whatever the call returned has to
+    reach it. Exactly one of error/result is set."""
+    seen = []
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise AgentError("boom", kind=ErrorKind.SERVER_ERROR)
+        return "the reply"
+
+    retry.call_with_retry(
+        flaky,
+        rng=random.Random(0),
+        sleep=Clock(),
+        on_attempt=lambda attempt, ms, err, result: seen.append((err, result)),
+    )
+    assert len(seen) == 2
+    assert seen[0][0] is not None and seen[0][1] is None
+    assert seen[1][0] is None and seen[1][1] == "the reply"

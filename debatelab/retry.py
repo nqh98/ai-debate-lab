@@ -23,7 +23,11 @@ def call_with_retry(
     base=DEFAULT_BASE_DELAY,
     cap=DEFAULT_CAP,
 ):
-    """Call fn() until it returns or its AgentError is not worth retrying."""
+    """Call fn() until it returns or its AgentError is not worth retrying.
+
+    on_attempt(attempt, duration_ms, error, result) fires once per attempt;
+    exactly one of error/result is None.
+    """
     for retry_index in range(max_attempts):
         attempt = retry_index + 1
         started = time.monotonic()
@@ -32,7 +36,7 @@ def call_with_retry(
         except AgentError as e:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             if on_attempt is not None:
-                on_attempt(attempt, elapsed_ms, e)
+                on_attempt(attempt, elapsed_ms, e, None)
             if not e.retryable or attempt == max_attempts:
                 raise
             if e.retry_after is not None:
@@ -43,5 +47,5 @@ def call_with_retry(
         else:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             if on_attempt is not None:
-                on_attempt(attempt, elapsed_ms, None)
+                on_attempt(attempt, elapsed_ms, None, result)
             return result
