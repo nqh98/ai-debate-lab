@@ -5,7 +5,10 @@ from fractions import Fraction
 import pytest
 
 from debatelab import cli
+from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
+
+from .conftest import happy_agent, make_store
 
 
 @pytest.fixture
@@ -349,3 +352,80 @@ def test_no_consensus_can_be_decided(workdir, capsys):
     assert store.read_state(debate_id)["human_decision"] == {
         "decision": "rejected", "note": "insufficient agreement"
     }
+
+
+def _run_a_debate(workdir):
+    store = make_store(workdir)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=1
+    )
+    return store, did
+
+
+def test_fsck_reports_ok_on_a_healthy_debate(workdir, capsys):
+    _store, did = _run_a_debate(workdir)
+    cli.main(["fsck", did])
+    assert capsys.readouterr().out.strip() == f"{did}: ok"
+
+
+def test_fsck_reports_ok_on_a_created_but_unrun_debate(workdir, capsys):
+    """No boundary event exists, so the prefix is genesis alone — compared
+    against exactly what create() wrote. A real check, not a vacuous one."""
+    cli.main(["new", "Pick a database"])
+    did = capsys.readouterr().out.strip()
+    cli.main(["fsck", did])
+    assert capsys.readouterr().out.strip() == f"{did}: ok"
+
+
+def test_fsck_notes_events_in_flight_after_the_last_checkpoint(
+    workdir, capsys
+):
+    """state.json is the last checkpoint, not the latest truth. A hard crash
+    leaves events past it, and reporting that as divergence would cry wolf on
+    exactly the debates fsck exists to inspect."""
+    store, did = _run_a_debate(workdir)
+    store.append_event(did, {
+        "round": 1, "phase": "propose", "agent": "a", "type": "agent_call",
+        "task": "deep", "attempt": 1, "duration_ms": 5, "ok": True,
+        "content": "",
+    })
+    cli.main(["fsck", did])
+    out = capsys.readouterr().out.strip()
+    assert out.startswith(f"{did}: ok")
+    assert "1 event in flight" in out
+
+
+def test_fsck_reports_diverged_and_names_the_key(workdir, capsys):
+    store, did = _run_a_debate(workdir)
+    state = store.read_state(did)
+    state["status"] = "approved"          # a lie the transcript does not tell
+    store.write_state(did, state)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["fsck", did])
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert f"{did}: diverged" in out
+    assert "status" in out
+    assert "awaiting_human" in out
+
+
+def test_fsck_reports_unverifiable_on_a_pre_genesis_debate(workdir, capsys):
+    """The four committed debates predate genesis events. They are refused,
+    not guessed at, and not migrated."""
+    store, did = _run_a_debate(workdir)
+    events = store.read_events(did)[1:]           # strip debate_created
+    path = store.path(did) / "transcript.jsonl"
+    path.write_text(
+        "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events)
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["fsck", did])
+    assert exc.value.code == 3
+    assert "unverifiable" in capsys.readouterr().out
+
+
+def test_fsck_on_a_missing_debate_fails_cleanly(workdir):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["fsck", "no-such-debate"])
+    assert exc.value.code != 0

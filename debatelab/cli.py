@@ -2,11 +2,13 @@
 import argparse
 import functools
 import http.server
+import json
 import sys
 from fractions import Fraction
 from importlib import resources
 from pathlib import Path
 
+from . import replay as replay_mod
 from .agents import models, registry
 from .store import DebateStore, LockError, render_summary
 
@@ -101,6 +103,61 @@ def cmd_list(args):
 
 def cmd_show(args):
     print(get_store().read_summary(args.id) or "(no summary yet)")
+
+
+# The events after which run() checkpoints: state.json equals the replay of
+# the transcript up to the last of these, and nothing later.
+_BOUNDARY_TYPES = frozenset({
+    "phase_completed", "consensus", "no_consensus", "error", "human_decision",
+})
+
+
+def _brief(value, limit=70):
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def cmd_fsck(args):
+    """Check state.json against a replay of the transcript.
+
+    state.json is the last checkpoint, not the latest truth: _checkpoint runs
+    at phase boundaries, while per-agent events land as futures complete. A
+    hard crash therefore leaves events after the last checkpoint, and those
+    are SUPPOSED to be absent from state.json. Comparing a total replay
+    against it would report divergence on exactly the crashed debates this
+    command exists to inspect — so compare the prefix up to the last
+    boundary, and report the rest as in flight.
+    """
+    store = get_store()
+    events = store.read_events(args.id)
+    state = store.read_state(args.id)
+    boundary = 0
+    for i, event in enumerate(events):
+        if event.get("type") in _BOUNDARY_TYPES:
+            boundary = i
+    try:
+        expected = replay_mod.replay(events[: boundary + 1])
+    except replay_mod.MissingGenesis as e:
+        print(f"{args.id}: unverifiable — {e}")
+        sys.exit(3)
+    in_flight = len(events) - (boundary + 1)
+    if expected == state:
+        note = ""
+        if in_flight:
+            plural = "s" if in_flight != 1 else ""
+            note = (
+                f" ({in_flight} event{plural} in flight after the last "
+                "checkpoint)"
+            )
+        print(f"{args.id}: ok{note}")
+        return
+    print(f"{args.id}: diverged")
+    for key in sorted(set(expected) | set(state)):
+        if expected.get(key) != state.get(key):
+            print(f"  {key}:")
+            print(f"    state.json: {_brief(state.get(key))}")
+            print(f"    replay    : {_brief(expected.get(key))}")
+    sys.exit(1)
 
 
 def cmd_decide(args, decision):
@@ -262,6 +319,12 @@ def main(argv=None):
     sp = sub.add_parser("show", help="print a debate's summary")
     sp.add_argument("id")
     sp.set_defaults(fn=cmd_show)
+
+    sp = sub.add_parser(
+        "fsck", help="check state.json against a replay of the transcript"
+    )
+    sp.add_argument("id")
+    sp.set_defaults(fn=cmd_fsck)
 
     sp = sub.add_parser("approve", help="approve the consensus answer")
     sp.add_argument("id")
