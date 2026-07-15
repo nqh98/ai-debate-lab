@@ -105,6 +105,7 @@ class Orchestrator:
                             len(state["roster"]),
                             Fraction(state["quorum"]),
                         ),
+                        "candidate": state["candidate"],
                     })
                     break
                 state["round"] = rnd

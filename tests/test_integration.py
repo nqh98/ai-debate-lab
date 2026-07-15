@@ -123,6 +123,90 @@ def test_no_consensus_candidate_can_be_approved_and_returned(workdir, capsys, mo
     assert "use postgres with replicas" in out
 
 
+def test_lower_cap_resume_keeps_checkpointed_candidate_for_approval(workdir, capsys):
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("Topic", "problem")
+    first_agents = [
+        MockAgent("alpha", [
+            "checkpointed answer", "critique", "checkpointed answer",
+            "NOMINATE: alpha", "VOTE: accept",
+        ]),
+        MockAgent("bravo", [
+            "other", "critique", "other",
+            "NOMINATE: alpha", "VOTE: reject",
+        ]),
+    ]
+
+    assert Orchestrator(store, first_agents).run(debate_id, max_rounds=1) == "no_consensus"
+    checkpointed = store.read_state(debate_id)["candidate"]
+    assert checkpointed["text"] == "checkpointed answer"
+
+    assert Orchestrator(
+        store, [MockAgent("alpha", []), MockAgent("bravo", [])]
+    ).run(debate_id, max_rounds=1) == "no_consensus"
+    cli.main(["approve", debate_id])
+    capsys.readouterr()
+
+    result = store.read_result(debate_id)
+    assert result["answer"] == checkpointed["text"]
+    assert result["candidate"] == {"agent": checkpointed["agent"], "round": 1}
+    assert checkpointed["text"] in store.read_final(debate_id)
+
+
+def test_lower_cap_resume_ignores_candidate_after_interrupted_vote_checkpoint(
+    workdir, capsys, monkeypatch
+):
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("Topic", "problem")
+    first_agents = [
+        MockAgent("alpha", [
+            "checkpointed answer", "critique", "checkpointed answer",
+            "NOMINATE: alpha", "VOTE: accept",
+        ]),
+        MockAgent("bravo", [
+            "other", "critique", "other",
+            "NOMINATE: alpha", "VOTE: reject",
+        ]),
+    ]
+    assert Orchestrator(store, first_agents).run(debate_id, max_rounds=1) == "no_consensus"
+    checkpointed = store.read_state(debate_id)["candidate"]
+
+    real_append_event = store.append_event
+
+    def interrupt_after_candidate(did, event):
+        real_append_event(did, event)
+        if event["type"] == "candidate":
+            raise RuntimeError("interrupted after candidate event")
+
+    monkeypatch.setattr(store, "append_event", interrupt_after_candidate)
+    interrupted_agents = [
+        MockAgent("alpha", [
+            "critique", "uncommitted answer", "NOMINATE: alpha", "VOTE: accept",
+        ]),
+        MockAgent("bravo", [
+            "critique", "other", "NOMINATE: alpha", "VOTE: reject",
+        ]),
+    ]
+    with pytest.raises(RuntimeError, match="interrupted after candidate event"):
+        Orchestrator(store, interrupted_agents).run(debate_id, max_rounds=2)
+    assert store.read_state(debate_id)["candidate"] == checkpointed
+
+    monkeypatch.setattr(store, "append_event", real_append_event)
+    assert Orchestrator(
+        store, [MockAgent("alpha", []), MockAgent("bravo", [])]
+    ).run(debate_id, max_rounds=1) == "no_consensus"
+    cli.main(["approve", debate_id])
+    capsys.readouterr()
+
+    result = store.read_result(debate_id)
+    final = store.read_final(debate_id)
+    assert store.read_state(debate_id)["candidate"] == checkpointed
+    assert result["answer"] == checkpointed["text"]
+    assert checkpointed["text"] in final
+    assert "uncommitted answer" not in result["answer"]
+    assert "uncommitted answer" not in final
+
+
 def test_reject_reasons_reach_round_two_prompts(workdir, capsys, monkeypatch):
     cli.main(["new", "Which database should we use?"])
     debate_id = capsys.readouterr().out.strip()

@@ -17,6 +17,15 @@ def build_result(
     round_ = None
     failed_phase = None
 
+    def set_candidate(snapshot):
+        nonlocal candidate, candidate_text
+        if snapshot is None:
+            candidate = None
+            candidate_text = None
+            return
+        candidate = {"agent": snapshot.get("agent"), "round": round_}
+        candidate_text = snapshot.get("text")
+
     for event in events:
         event_type = event.get("type")
         if event_type == "debate_created":
@@ -53,6 +62,8 @@ def build_result(
             reason = event.get("content")
             tally = event.get("tally")
             round_ = event.get("round")
+            if "candidate" in event:
+                set_candidate(event["candidate"])
             decided_at = None
             note = None
             failed_phase = None
