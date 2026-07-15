@@ -38,6 +38,21 @@
   h3 { font-size:14px; margin:0 0 6px; color:var(--accent); }
   pre { white-space:pre-wrap; word-break:break-word; margin:0;
         font:13px/1.5 ui-monospace,monospace; }
+  .md > :first-child { margin-top:0; }
+  .md > :last-child { margin-bottom:0; }
+  .md h3, .md h4, .md h5, .md h6 { margin:14px 0 4px; color:var(--fg); }
+  .md p { margin:8px 0; }
+  .md ul, .md ol { margin:8px 0; padding-left:22px; }
+  .md li { margin:2px 0; }
+  .md blockquote { margin:8px 0; padding-left:12px;
+                   border-left:3px solid var(--line); color:var(--muted); }
+  .md code { background:var(--bg); border:1px solid var(--line);
+             border-radius:4px; padding:0 4px;
+             font:13px/1.5 ui-monospace,monospace; }
+  .md pre.code { background:var(--bg); border:1px solid var(--line);
+                 border-radius:6px; padding:10px; overflow-x:auto; margin:8px 0; }
+  .md pre.code code { background:none; border:0; padding:0; }
+  .md a { color:var(--accent); }
   details { margin:8px 0; }
   summary { cursor:pointer; color:var(--muted); font-size:13px; }
   .vote-accept { color:var(--ok); font-weight:600; }
@@ -64,6 +79,101 @@ function esc(s) {
   return String(s ?? "")
     .replace(/\u0000/g, "")
     .replace(/[&<>"']/g, c => ESCAPES[c]);
+}
+
+const MD_SCHEMES = /^(https?:|mailto:)/i;
+
+function inline(s) {
+  /* s is already escaped. Inline code is parked first so emphasis rules
+     cannot fire inside it. */
+  const codes = [];
+  let t = s.replace(/`([^`]+)`/g, (_, c) => {
+    codes.push(c);
+    return "\u0000C" + (codes.length - 1) + "\u0000";
+  });
+  t = t
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, label, href) =>
+      MD_SCHEMES.test(href)
+        ? `<a href="${href}" rel="noopener noreferrer" target="_blank">${label}</a>`
+        : whole)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/_([^_]+)_/g, "<em>$1</em>");
+  return t.replace(/\u0000C(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+}
+
+function renderMarkdown(text) {
+  /* Escape first, then apply rules to the escaped string: the only tags in
+     the output are ones this function emitted. */
+  let s = esc(text);
+  if (!s.trim()) return "";
+
+  const fences = [];
+  s = s.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
+    fences.push(code);
+    return "\u0000F" + (fences.length - 1) + "\u0000";
+  });
+
+  const out = [];
+  let list = null, para = [], quote = [];
+  const flushList = () => {
+    if (!list) return;
+    out.push(`<${list.tag}>` +
+      list.items.map(x => `<li>${inline(x)}</li>`).join("") +
+      `</${list.tag}>`);
+    list = null;
+  };
+  const flushPara = () => {
+    if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; }
+  };
+  const flushQuote = () => {
+    if (quote.length) {
+      out.push(`<blockquote>${inline(quote.join(" "))}</blockquote>`);
+      quote = [];
+    }
+  };
+  const flushAll = () => { flushList(); flushPara(); flushQuote(); };
+
+  for (const line of s.split("\n")) {
+    const fence = line.match(/^\u0000F(\d+)\u0000$/);
+    if (fence) {
+      flushAll();
+      out.push(`<pre class="code"><code>${fences[+fence[1]]}</code></pre>`);
+      continue;
+    }
+    if (!line.trim()) { flushAll(); continue; }
+
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      flushAll();
+      /* +2: the page owns h1 and h2, so an agent's h1 becomes an h3. */
+      out.push(`<h${Math.min(h[1].length + 2, 6)}>${inline(h[2])}` +
+               `</h${Math.min(h[1].length + 2, 6)}>`);
+      continue;
+    }
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (ul) {
+      flushPara(); flushQuote();
+      if (!list || list.tag !== "ul") { flushList(); list = {tag: "ul", items: []}; }
+      list.items.push(ul[1]);
+      continue;
+    }
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (ol) {
+      flushPara(); flushQuote();
+      if (!list || list.tag !== "ol") { flushList(); list = {tag: "ol", items: []}; }
+      list.items.push(ol[1]);
+      continue;
+    }
+    /* &gt;, not >: the marker was escaped before this rule ran. */
+    const bq = line.match(/^&gt;\s?(.*)$/);
+    if (bq) { flushPara(); flushList(); quote.push(bq[1]); continue; }
+
+    flushList(); flushQuote();
+    para.push(line.trim());
+  }
+  flushAll();
+  return out.join("");
 }
 </script>
 <script>
