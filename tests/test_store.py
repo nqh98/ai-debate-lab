@@ -124,6 +124,26 @@ def test_state_roundtrip(tmp_path):
     assert store.read_state(did)["status"] == "running"
 
 
+def test_result_and_final_roundtrip_atomically_without_tmp_files(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "p")
+    result = {"status": "no_consensus", "tally": {"accepts": 1}}
+    markdown = "# Final\n"
+
+    assert store.read_result(did) == {}
+    assert store.read_final(did) == ""
+    store.write_result(did, result)
+    store.write_final(did, markdown)
+
+    debate_path = store.path(did)
+    assert json.loads((debate_path / "result.json").read_text()) == result
+    assert store.read_result(did) == result
+    assert (debate_path / "final.md").read_text() == markdown
+    assert store.read_final(did) == markdown
+    assert not list(debate_path.glob("result.json.*.tmp"))
+    assert not list(debate_path.glob("final.md.*.tmp"))
+
+
 def test_index_lists_debates(tmp_path):
     store = DebateStore(tmp_path / "debates")
     a = store.create("First", "p")

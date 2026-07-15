@@ -25,6 +25,13 @@ def _state_sha256(state):
 class DebateHalted(Exception):
     """Too few agents responded to continue the debate."""
 
+    def __init__(self, failed_phase: str, responders: int):
+        self.failed_phase = failed_phase
+        super().__init__(
+            f"only {responders} agent(s) responded in phase "
+            f"'{failed_phase}' — need at least 2"
+        )
+
 
 class Orchestrator:
     def __init__(self, store, agents, progress=lambda msg: None,
@@ -92,6 +99,11 @@ class Orchestrator:
                         "content": (
                             "no consensus reached within the configured round limit"
                         ),
+                        "tally": protocol.tally(
+                            state["votes"],
+                            len(state["roster"]),
+                            Fraction(state["quorum"]),
+                        ),
                     })
                     break
                 state["round"] = rnd
@@ -137,6 +149,7 @@ class Orchestrator:
             self.store.append_event(debate_id, {
                 "round": state["round"], "phase": "end", "agent": None,
                 "type": "error", "content": str(e),
+                "failed_phase": e.failed_phase,
             })
         self._checkpoint(debate_id, state)
         self.store.rebuild_index()
@@ -221,10 +234,7 @@ class Orchestrator:
                         "type": "abstained", "content": str(e),
                     })
         if len(results) < 2:
-            raise DebateHalted(
-                f"only {len(results)} agent(s) responded in phase "
-                f"'{phase}' — need at least 2"
-            )
+            raise DebateHalted(phase, len(results))
         return results
 
     def _phase_propose(self, debate_id, state, problem):

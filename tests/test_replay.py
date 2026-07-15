@@ -365,6 +365,37 @@ def test_no_consensus_sets_its_status():
     assert state["status"] == "no_consensus"
 
 
+def test_terminal_event_enrichments_do_not_change_replay_state():
+    plain = [
+        genesis(),
+        ev("no_consensus", phase="end"),
+        ev("error", phase="end", content="only one response"),
+    ]
+    enriched = [
+        genesis(),
+        ev(
+            "no_consensus",
+            phase="end",
+            tally={
+                "accepts": 1,
+                "rejects": 1,
+                "abstains": 0,
+                "roster_size": 2,
+                "required": 2,
+                "quorum": "2/3",
+            },
+        ),
+        ev(
+            "error",
+            phase="end",
+            content="only one response",
+            failed_phase="propose",
+        ),
+    ]
+
+    assert replay.replay(enriched) == replay.replay(plain)
+
+
 def test_human_decision_sets_the_decision_and_the_status():
     state = replay.replay([
         genesis(),

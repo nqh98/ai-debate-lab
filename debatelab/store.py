@@ -198,6 +198,23 @@ class DebateStore:
     def read_state(self, debate_id) -> dict:
         return json.loads((self.path(debate_id) / "state.json").read_text())
 
+    def write_result(self, debate_id, result: dict) -> None:
+        _atomic_write(
+            self.path(debate_id) / "result.json",
+            json.dumps(result, indent=2, ensure_ascii=False),
+        )
+
+    def read_result(self, debate_id) -> dict:
+        p = self.path(debate_id) / "result.json"
+        return json.loads(p.read_text()) if p.exists() else {}
+
+    def write_final(self, debate_id, markdown: str) -> None:
+        _atomic_write(self.path(debate_id) / "final.md", markdown)
+
+    def read_final(self, debate_id) -> str:
+        p = self.path(debate_id) / "final.md"
+        return p.read_text() if p.exists() else ""
+
     def read_problem(self, debate_id) -> str:
         return (self.path(debate_id) / "problem.md").read_text()
 

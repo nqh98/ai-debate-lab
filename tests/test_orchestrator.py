@@ -374,6 +374,9 @@ def test_two_accepts_of_a_five_agent_roster_is_not_consensus(tmp_path):
     assert no_consensus[0]["content"] == (
         "no consensus reached within the configured round limit"
     )
+    assert no_consensus[0]["tally"] == protocol.tally(
+        state["votes"], len(state["roster"]), Fraction(state["quorum"])
+    )
 
 
 def test_full_roster_accept_reaches_consensus_with_a_tally(tmp_path):
@@ -671,3 +674,6 @@ def test_a_halted_phase_records_started_without_completed(tmp_path):
     assert "phase_completed" not in types
     assert store.read_state(did)["status"] == "error"
     assert store.read_state(did)["last_completed_phase"] is None
+    error = next(e for e in store.read_events(did) if e["type"] == "error")
+    assert error["phase"] == "end"
+    assert error["failed_phase"] == "propose"
