@@ -218,6 +218,11 @@ class Orchestrator:
                 )
                 if retry is not None:
                     text = retry
+                    self.store.append_event(debate_id, {
+                        "round": state["round"], "phase": "vote", "agent": name,
+                        "type": "nomination_retry", "content": retry,
+                        "nominee": nominee,
+                    })
             if nominee == name:
                 self.store.append_event(debate_id, {
                     "round": state["round"], "phase": "vote", "agent": name,

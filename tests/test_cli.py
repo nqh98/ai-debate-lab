@@ -1,4 +1,6 @@
 import json
+from contextlib import contextmanager
+from fractions import Fraction
 
 import pytest
 
@@ -158,6 +160,69 @@ def test_run_needs_two_enabled_agents(workdir, capsys):
     )
     with pytest.raises(SystemExit, match="at least 2"):
         cli.main(["run", debate_id])
+
+
+def test_run_forwards_force_to_store_lock(workdir, capsys, monkeypatch):
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("Topic", "problem")
+    calls = {}
+
+    @contextmanager
+    def run_lock(debate_id, force=False):
+        calls["debate_id"] = debate_id
+        calls["force"] = force
+        yield
+
+    class FakeOrchestrator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            return "no_consensus"
+
+    monkeypatch.setattr(cli, "get_store", lambda: store)
+    monkeypatch.setattr(DebateStore, "run_lock", lambda self, *args, **kwargs:
+                        run_lock(*args, **kwargs))
+    monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    from debatelab import orchestrator
+    monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
+
+    cli.main(["run", debate_id, "--force"])
+
+    assert calls == {"debate_id": debate_id, "force": True}
+
+
+def test_run_forwards_quorum_to_orchestrator(workdir, capsys, monkeypatch):
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("Topic", "problem")
+    calls = {}
+
+    class FakeOrchestrator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, debate_id, max_rounds=None, quorum=None):
+            calls.update({
+                "debate_id": debate_id,
+                "max_rounds": max_rounds,
+                "quorum": quorum,
+            })
+            return "no_consensus"
+
+    monkeypatch.setattr(cli, "get_store", lambda: store)
+    monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    from debatelab import orchestrator
+    monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
+
+    cli.main(["run", debate_id, "--quorum", "3/4"])
+
+    assert calls == {
+        "debate_id": debate_id,
+        "max_rounds": None,
+        "quorum": Fraction(3, 4),
+    }
 
 
 def test_status_rejects_traversal_id_without_reading_outside_root(workdir):

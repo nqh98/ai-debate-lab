@@ -1,4 +1,7 @@
 import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -138,21 +141,44 @@ def test_atomic_write_replaces_content_and_leaves_no_tmp(tmp_path):
 
 
 def test_atomic_write_tmp_keeps_the_full_target_name(tmp_path, monkeypatch):
-    """with_suffix('.json.tmp') would turn summary.md into summary.json.tmp;
-    the tmp file must sit beside the target so replace() is a same-filesystem
-    rename, which is what makes it atomic."""
+    """The unique temp file must stay beside the target for atomic replacement."""
     seen = {}
-    original = Path.replace
+    original = os.replace
 
-    def spy(self, target):
-        seen["tmp"] = self.name
-        seen["dir"] = self.parent
-        return original(self, target)
+    def spy(src, target):
+        seen["tmp"] = Path(src)
+        return original(src, target)
 
-    monkeypatch.setattr(Path, "replace", spy)
+    monkeypatch.setattr(store_mod.os, "replace", spy)
     store_mod._atomic_write(tmp_path / "summary.md", "x")
-    assert seen["tmp"] == "summary.md.tmp"
-    assert seen["dir"] == tmp_path
+    assert seen["tmp"].parent == tmp_path
+    assert seen["tmp"].name.startswith("summary.md.")
+    assert seen["tmp"].name.endswith(".tmp")
+    assert seen["tmp"].name != "summary.md.tmp"
+
+
+def test_atomic_write_allows_concurrent_writers(tmp_path, monkeypatch):
+    path = tmp_path / "index.json"
+    barrier = threading.Barrier(2)
+    original = Path.write_text
+
+    def synchronize_fixed_temp_writes(self, text, *args, **kwargs):
+        result = original(self, text, *args, **kwargs)
+        if self == tmp_path / "index.json.tmp":
+            barrier.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(Path, "write_text", synchronize_fixed_temp_writes)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(store_mod._atomic_write, path, content)
+            for content in ("first", "second")
+        ]
+        for future in futures:
+            future.result(timeout=5)
+
+    assert path.read_text() in {"first", "second"}
+    assert list(tmp_path.iterdir()) == [path]
 
 
 def test_write_summary_and_rebuild_index_leave_no_tmp_behind(tmp_path):

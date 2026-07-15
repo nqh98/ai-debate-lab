@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,9 +35,22 @@ def _atomic_write(path: Path, text: str) -> None:
     No fsync: the goal is that the polling viewer never sees a torn file, not
     that writes survive power loss.
     """
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
-    tmp.replace(path)
+    tmp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_name = tmp.name
+            tmp.write(text)
+        os.replace(tmp_name, path)
+    finally:
+        if tmp_name is not None:
+            Path(tmp_name).unlink(missing_ok=True)
 
 
 class LockError(Exception):

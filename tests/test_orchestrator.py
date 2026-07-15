@@ -2,6 +2,7 @@ import pytest
 
 from debatelab.agents import models
 from debatelab.agents.base import AgentError
+from debatelab import prompts, protocol
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
@@ -279,6 +280,37 @@ def test_unparseable_nomination_is_reasked_once_and_then_counted(tmp_path):
     assert state["abstained"] == []
     assert "could not be parsed" in a.prompts[-2]
     assert "NOMINATE: <agent-name>" in a.prompts[-2]
+
+
+def test_nomination_retry_events_replay_the_recorded_candidate(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    a = MockAgent("a", ["prop a", "crit a", "rev a", "not a nomination",
+                        "NOMINATE: b", "VOTE: accept"])
+    b = MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: b",
+                        "VOTE: accept"])
+
+    Orchestrator(store, [a, b]).run(did, max_rounds=1)
+
+    events = store.read_events(did)
+    names = ["a", "b"]
+    nominations = {}
+    for event in events:
+        if event["type"] == "nomination":
+            nominee = prompts.parse_nomination(event["content"], names)
+        elif event["type"] == "nomination_retry":
+            nominee = event["nominee"]
+        else:
+            continue
+        if nominee and nominee != event["agent"]:
+            nominations[event["agent"]] = nominee
+
+    candidate, was_fallback = protocol.select_candidate(
+        nominations, names, f"{did}:1"
+    )
+    assert nominations == {"a": "b"}
+    assert not was_fallback
+    assert candidate == store.read_state(did)["candidate"]["agent"] == "b"
 
 
 def test_unparseable_nomination_twice_uses_fallback_candidate(tmp_path):
