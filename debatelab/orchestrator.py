@@ -36,7 +36,7 @@ class DebateHalted(Exception):
 
 class Orchestrator:
     def __init__(self, store, agents, progress=lambda msg: None,
-                 sleep=None, rng=None):
+                 sleep=None, rng=None, live=None):
         if len(agents) < 2:
             raise ValueError("a debate needs at least 2 agents")
         self.store = store
@@ -45,6 +45,7 @@ class Orchestrator:
         self.progress = progress
         self.sleep = sleep or DEFAULT_SLEEP
         self.rng = rng or random.Random()
+        self.live = live
 
     def run(self, debate_id: str, max_rounds: int | None = None,
             quorum: Fraction | None = None) -> str:
@@ -125,6 +126,8 @@ class Orchestrator:
                 if phase == "nominate":
                     state["candidate"] = None
                 self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
+                if self.live:
+                    self.live.set_phase(rnd, phase)
                 # Brackets the two assignments a reader must reproduce. Without
                 # phase_completed, a phase that raised DebateHalted is
                 # indistinguishable from one that finished; without
@@ -212,6 +215,25 @@ class Orchestrator:
 
         return on_attempt
 
+    def _call_agent(self, debate_id, state, phase, name, prompt, task):
+        """One retried agent call, reported to live status while in flight."""
+        if self.live:
+            self.live.call_started(
+                name, task, self.agents[name].stall_after.get(task)
+            )
+        try:
+            return retry.call_with_retry(
+                lambda: self.agents[name].ask(prompt, task),
+                rng=self.rng,
+                sleep=self.sleep,
+                on_attempt=self._record_call(
+                    debate_id, state, phase, name, task
+                ),
+            )
+        finally:
+            if self.live:
+                self.live.call_finished(name)
+
     def _reask(self, debate_id, state, phase, name, prompt, parse, required,
                task):
         """Ask one agent again after an unparseable reply.
@@ -220,15 +242,9 @@ class Orchestrator:
         Re-asks run serially because they are rare, cheap FAST requests.
         """
         try:
-            reply = retry.call_with_retry(
-                lambda: self.agents[name].ask(
-                    prompts.reask(prompt, required), task
-                ),
-                rng=self.rng,
-                sleep=self.sleep,
-                on_attempt=self._record_call(
-                    debate_id, state, phase, name, task
-                ),
+            reply = self._call_agent(
+                debate_id, state, phase, name,
+                prompts.reask(prompt, required), task,
             )
         except AgentError:
             return None, None
@@ -252,14 +268,7 @@ class Orchestrator:
         as a value. See specs/2026-07-15-synthesis-phase-design.md §5.
         """
         try:
-            reply = retry.call_with_retry(
-                lambda: self.agents[name].ask(prompt, task),
-                rng=self.rng,
-                sleep=self.sleep,
-                on_attempt=self._record_call(
-                    debate_id, state, phase, name, task
-                ),
-            )
+            reply = self._call_agent(debate_id, state, phase, name, prompt, task)
         except AgentError as e:
             return None, str(e)
         return reply.text, None
@@ -270,14 +279,8 @@ class Orchestrator:
         results = {}
 
         def call(name):
-            prompt = prompt_for(name)
-            reply = retry.call_with_retry(
-                lambda: self.agents[name].ask(prompt, task),
-                rng=self.rng,
-                sleep=self.sleep,
-                on_attempt=self._record_call(
-                    debate_id, state, phase, name, task
-                ),
+            reply = self._call_agent(
+                debate_id, state, phase, name, prompt_for(name), task
             )
             return reply.text
 

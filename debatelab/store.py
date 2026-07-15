@@ -212,6 +212,17 @@ class DebateStore:
             json.dumps(result, indent=2, ensure_ascii=False),
         )
 
+    def write_live(self, debate_id, payload: dict) -> None:
+        """Ephemeral in-flight run status for the viewer; never read on
+        resume, deleted on run exit. The transcript stays sole truth."""
+        _atomic_write(
+            self.path(debate_id) / "live.json",
+            json.dumps(payload, indent=2),
+        )
+
+    def delete_live(self, debate_id) -> None:
+        (self.path(debate_id) / "live.json").unlink(missing_ok=True)
+
     def read_result(self, debate_id) -> dict:
         p = self.path(debate_id) / "result.json"
         return json.loads(p.read_text()) if p.exists() else {}

@@ -931,3 +931,30 @@ def test_plain_debate_prompts_are_unprefaced(tmp_path):
     for agent in (a, b):
         assert all("you cannot" not in p for p in agent.prompts)
         assert all("working directory" not in p for p in agent.prompts)
+
+
+def test_orchestrator_reports_calls_to_live(tmp_path):
+    class RecordingLive:
+        def __init__(self):
+            self.events = []
+        def set_phase(self, rnd, phase):
+            self.events.append(("phase", rnd, phase))
+        def call_started(self, agent, task, stall_after):
+            self.events.append(("start", agent, task, stall_after))
+        def call_finished(self, agent):
+            self.events.append(("end", agent))
+
+    store = make_store(tmp_path)
+    did = store.create("t", "p")
+    live = RecordingLive()
+    orchestrator.Orchestrator(
+        store,
+        [happy_agent("a", nominee="b"), happy_agent("b", nominee="a")],
+        live=live,
+    ).run(did)
+    starts = [e for e in live.events if e[0] == "start"]
+    ends = [e for e in live.events if e[0] == "end"]
+    assert len(starts) == len(ends) > 0
+    assert ("phase", 1, "propose") in live.events
+    # stall thresholds flow from the agent (Agent class default: deep 900)
+    assert ("start", "a", "deep", 900) in starts

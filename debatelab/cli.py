@@ -120,17 +120,26 @@ def cmd_run(args):
             agents = registry.build_agents(
                 ready, workdir=str(workdir) if workdir else None
             )
+            from .livestatus import LiveStatus
+            live = LiveStatus(
+                store, args.id, progress=lambda m: print(m, flush=True)
+            )
             try:
                 orch = Orchestrator(
                     store,
                     agents,
                     progress=lambda m: print(m, flush=True),
+                    live=live,
                 )
             except ValueError as e:
                 sys.exit(str(e))
-            status = orch.run(
-                args.id, max_rounds=args.max_rounds, quorum=args.quorum
-            )
+            live.start()
+            try:
+                status = orch.run(
+                    args.id, max_rounds=args.max_rounds, quorum=args.quorum
+                )
+            finally:
+                live.stop()
     except LockError as e:
         sys.exit(str(e))
     print(f"final status: {status}")
