@@ -246,6 +246,11 @@ def test_two_accepts_of_a_five_agent_roster_is_not_consensus(tmp_path):
     assert state["roster"] == ["a", "b", "c", "d", "e"]
     assert sorted(state["votes"]) == ["a", "b"]
     assert status == "no_consensus"
+    no_consensus = [e for e in store.read_events(did)
+                    if e["type"] == "no_consensus"]
+    assert no_consensus[0]["content"] == (
+        "no consensus reached within the configured round limit"
+    )
 
 
 def test_full_roster_accept_reaches_consensus_with_a_tally(tmp_path):

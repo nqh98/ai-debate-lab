@@ -53,7 +53,7 @@ class Orchestrator:
                         "round": state["round"], "phase": "end", "agent": None,
                         "type": "no_consensus",
                         "content": (
-                            f"no unanimous vote after {state['max_rounds']} rounds"
+                            "no consensus reached within the configured round limit"
                         ),
                     })
                     break
