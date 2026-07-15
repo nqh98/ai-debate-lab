@@ -1,6 +1,7 @@
 """Runs a debate: fans out phase prompts to all agents, applies the protocol,
 checkpoints state after every phase so interrupted runs resume."""
 import concurrent.futures as cf
+from fractions import Fraction
 
 from . import prompts, protocol
 from .agents import models
@@ -21,12 +22,24 @@ class Orchestrator:
         self.order = [a.name for a in agents]
         self.progress = progress
 
-    def run(self, debate_id: str, max_rounds: int | None = None) -> str:
+    def run(self, debate_id: str, max_rounds: int | None = None,
+            quorum: Fraction | None = None) -> str:
         state = self.store.read_state(debate_id)
         if state["status"] in ("awaiting_human", "approved", "rejected"):
             return state["status"]
         if max_rounds is not None:
             state["max_rounds"] = max_rounds
+        if quorum is not None:
+            state["quorum"] = str(quorum)
+        state.setdefault("quorum", str(protocol.DEFAULT_QUORUM))
+        recorded = state.get("roster")
+        if recorded is not None and recorded != self.order:
+            self.store.append_event(debate_id, {
+                "round": state["round"], "phase": "run", "agent": None,
+                "type": "roster_changed",
+                "content": f"roster changed from {recorded} to {self.order}",
+            })
+        state["roster"] = list(self.order)
         state["status"] = "running"
         problem = self.store.read_problem(debate_id)
         try:
@@ -49,13 +62,20 @@ class Orchestrator:
                 self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
                 getattr(self, f"_phase_{phase}")(debate_id, state, problem)
                 state["last_completed_phase"] = phase
-                if phase == "vote" and protocol.check_consensus(state["votes"]):
+                quorum_frac = Fraction(state["quorum"])
+                roster_size = len(state["roster"])
+                if phase == "vote" and protocol.check_consensus(
+                    state["votes"], roster_size, quorum_frac
+                ):
                     state["status"] = "awaiting_human"
                     self.store.append_event(debate_id, {
                         "round": rnd, "phase": "vote",
                         "agent": state["candidate"]["agent"],
                         "type": "consensus",
                         "content": state["candidate"]["text"],
+                        "tally": protocol.tally(
+                            state["votes"], roster_size, quorum_frac
+                        ),
                     })
                     self._checkpoint(debate_id, state)
                     break

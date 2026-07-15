@@ -221,6 +221,17 @@ def test_max_rounds_must_be_positive(workdir):
     assert exc.value.code == 2
 
 
+def test_quorum_fraction_accepts_fractions_and_rejects_junk():
+    import argparse
+    from fractions import Fraction
+
+    assert cli.quorum_fraction("2/3") == Fraction(2, 3)
+    assert cli.quorum_fraction("1") == Fraction(1)
+    for bad in ("banana", "0", "5/4", "-1/2"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.quorum_fraction(bad)
+
+
 def test_decision_recovers_after_event_append_interruption(workdir, capsys, monkeypatch):
     store, debate_id = _make_awaiting(workdir, capsys)
     real_write_state = DebateStore.write_state

@@ -3,6 +3,7 @@ import argparse
 import functools
 import http.server
 import sys
+from fractions import Fraction
 from importlib import resources
 from pathlib import Path
 
@@ -15,6 +16,18 @@ def positive_int(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return number
+
+
+def quorum_fraction(value: str) -> Fraction:
+    try:
+        q = Fraction(value)
+    except (ValueError, ZeroDivisionError):
+        raise argparse.ArgumentTypeError(
+            f"not a fraction: {value!r} (try 2/3)"
+        )
+    if not 0 < q <= 1:
+        raise argparse.ArgumentTypeError("must be greater than 0 and at most 1")
+    return q
 
 
 def get_store() -> DebateStore:
@@ -54,7 +67,7 @@ def cmd_run(args):
         )
     except ValueError as e:
         sys.exit(str(e))
-    status = orch.run(args.id, max_rounds=args.max_rounds)
+    status = orch.run(args.id, max_rounds=args.max_rounds, quorum=args.quorum)
     print(f"final status: {status}")
     if status in ("awaiting_human", "no_consensus"):
         print(
@@ -219,6 +232,12 @@ def main(argv=None):
     sp = sub.add_parser("run", help="run debate rounds until consensus or cap")
     sp.add_argument("id")
     sp.add_argument("--max-rounds", type=positive_int, default=None)
+    sp.add_argument(
+        "--quorum",
+        type=quorum_fraction,
+        default=None,
+        help="fraction of the roster that must accept, e.g. 2/3 (default 2/3)",
+    )
     sp.add_argument("--config", default="agents.yaml")
     sp.set_defaults(fn=cmd_run)
 

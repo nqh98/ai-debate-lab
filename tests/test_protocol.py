@@ -1,4 +1,11 @@
+from fractions import Fraction
+
 from debatelab import protocol
+
+
+Q = Fraction(2, 3)
+ACCEPT = {"vote": "accept", "reason": "r"}
+REJECT = {"vote": "reject", "reason": "r"}
 
 
 def test_next_phase_fresh_debate_starts_with_propose():
@@ -55,9 +62,37 @@ def test_select_candidate_fallback_is_not_always_the_first_agent():
     assert winners == {"a", "b"}
 
 
-def test_check_consensus():
-    accept = {"vote": "accept", "reason": "r"}
-    reject = {"vote": "reject", "reason": "r"}
-    assert protocol.check_consensus({"a": accept, "b": accept}) is True
-    assert protocol.check_consensus({"a": accept, "b": reject}) is False
-    assert protocol.check_consensus({}) is False
+def test_required_accepts_uses_exact_fraction_arithmetic():
+    # A float quorum of 0.667 would give ceil(0.667*3) == 3, silently
+    # demanding unanimity on the default 3-agent roster.
+    assert protocol.required_accepts(3, Q) == 2
+    assert protocol.required_accepts(4, Q) == 3
+    assert protocol.required_accepts(5, Q) == 4
+
+
+def test_check_consensus_quorum_table():
+    votes3 = {"a": ACCEPT, "b": ACCEPT}
+    assert protocol.check_consensus(votes3, 3, Q) is True
+    assert protocol.check_consensus({"a": ACCEPT}, 3, Q) is False
+    assert protocol.check_consensus(votes3, 5, Q) is False
+    five = {n: ACCEPT for n in "abcd"}
+    assert protocol.check_consensus(five, 5, Q) is True
+
+
+def test_check_consensus_any_reject_blocks_even_at_quorum():
+    votes = {"a": ACCEPT, "b": ACCEPT, "c": REJECT}
+    assert protocol.check_consensus(votes, 3, Q) is False
+
+
+def test_check_consensus_no_votes_is_false():
+    assert protocol.check_consensus({}, 3, Q) is False
+
+
+def test_tally_derives_abstains_from_the_roster():
+    """abstains is roster minus voters, not state['abstained'] — that list is
+    per-round and mixes nominate- and vote-phase abstentions."""
+    t = protocol.tally({"a": ACCEPT, "b": REJECT}, 5, Q)
+    assert t == {
+        "accepts": 1, "rejects": 1, "abstains": 3,
+        "roster_size": 5, "required": 4, "quorum": "2/3",
+    }

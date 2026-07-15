@@ -221,3 +221,88 @@ def test_zero_valid_nominations_emits_fallback_candidate(tmp_path):
     fallbacks = [e for e in store.read_events(did)
                  if e["type"] == "fallback_candidate"]
     assert len(fallbacks) == 1
+
+
+def test_two_accepts_of_a_five_agent_roster_is_not_consensus(tmp_path):
+    """Regression, verified to reproduce against the pre-fix code: consensus
+    was unanimity among agents that VOTED, and a phase needed only 2
+    responders, so 5 configured agents with 3 network failures and 2 accepts
+    returned 'awaiting_human'. It must now be no_consensus (2 < ceil(2/3*5)=4).
+
+    A MockAgent with an empty script raises AgentError on every ask, which is
+    how c/d/e abstain in every phase.
+    """
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b",
+                        "VOTE: accept"]),
+        MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"]),
+        MockAgent("c", []), MockAgent("d", []), MockAgent("e", []),
+    ]
+    status = Orchestrator(store, agents).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert state["roster"] == ["a", "b", "c", "d", "e"]
+    assert sorted(state["votes"]) == ["a", "b"]
+    assert status == "no_consensus"
+
+
+def test_full_roster_accept_reaches_consensus_with_a_tally(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b",
+                        "VOTE: accept"]),
+        MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"]),
+        MockAgent("c", ["prop c", "crit c", "rev c", "NOMINATE: a",
+                        "VOTE: accept"]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    assert store.read_state(did)["status"] == "awaiting_human"
+    consensus = [e for e in store.read_events(did) if e["type"] == "consensus"]
+    assert consensus[0]["tally"] == {
+        "accepts": 3, "rejects": 0, "abstains": 0,
+        "roster_size": 3, "required": 2, "quorum": "2/3",
+    }
+
+
+def test_roster_change_on_resume_is_recorded(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    state = store.read_state(did)
+    state["roster"] = ["a", "b", "zz"]
+    store.write_state(did, state)
+    agents = [
+        MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b",
+                        "VOTE: reject"]),
+        MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: reject"]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    changed = [e for e in store.read_events(did) if e["type"] == "roster_changed"]
+    assert len(changed) == 1
+    assert store.read_state(did)["roster"] == ["a", "b"]
+
+
+def test_state_predating_roster_and_quorum_still_runs(tmp_path):
+    """Compatibility: old debates have no roster/quorum keys. They must
+    default rather than raise, and must not emit a spurious roster_changed."""
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    state = store.read_state(did)
+    del state["roster"]
+    del state["quorum"]
+    store.write_state(did, state)
+    agents = [
+        MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b",
+                        "VOTE: accept"]),
+        MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert state["quorum"] == "2/3"
+    assert state["roster"] == ["a", "b"]
+    assert not [e for e in store.read_events(did) if e["type"] == "roster_changed"]

@@ -64,6 +64,8 @@ class DebateStore:
                 "status": "created",
                 "round": 0,
                 "max_rounds": 5,
+                "quorum": "2/3",
+                "roster": None,
                 "last_completed_phase": None,
                 "proposals": {},
                 "critiques": {},
