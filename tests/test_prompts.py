@@ -131,3 +131,17 @@ def test_synthesize_prompt_is_detectable_by_its_header():
     ]
     for p in others:
         assert prompts.SYNTHESIS_HEADER not in p
+
+
+def test_ground_problem_attached_cites_commit():
+    out = prompts.ground_problem("The problem.", True, "abc123")
+    assert "abc123" in out
+    assert "file:line" in out
+    assert out.endswith("The problem.")
+
+
+def test_ground_problem_unattached_warns():
+    out = prompts.ground_problem("The problem.", False, "abc123")
+    assert "you cannot" in out
+    assert "abc123" not in out
+    assert out.endswith("The problem.")

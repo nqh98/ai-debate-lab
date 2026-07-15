@@ -217,6 +217,27 @@ def test_cli_agent_routes_deep_and_fast_to_different_models(tmp_path):
     assert {deep, fast} == {"gemini-3-pro", "gemini-3-flash"}
 
 
+def test_cli_agent_picks_ceiling_by_task(monkeypatch):
+    seen = {}
+    real_run = subprocess.run
+
+    def spy_run(cmd, **kw):
+        seen["timeout"] = kw.get("timeout", "MISSING")
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr("debatelab.agents.cli_agent.subprocess.run", spy_run)
+    agent = CliAgent("x", ["echo", "{prompt}"], timeout={"fast": 5, "deep": None})
+    agent.ask("hi", task=DEEP)
+    assert seen["timeout"] is None
+    agent.ask("hi", task=FAST)
+    assert seen["timeout"] == 5
+
+
+def test_cli_agent_normalizes_int_timeout():
+    agent = CliAgent("x", ["echo", "{prompt}"], timeout=9)
+    assert agent.timeout == {"fast": 9, "deep": 9}
+
+
 def test_reply_is_immutable():
     from dataclasses import FrozenInstanceError
 

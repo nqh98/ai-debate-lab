@@ -7,6 +7,16 @@ import urllib.request
 from . import models
 from .base import Agent, AgentError, ErrorKind, Reply
 
+MODELS_DISCOVERY_TIMEOUT = 30
+
+
+def _normalize_timeout(timeout):
+    if timeout is None:
+        return {"fast": None, "deep": None}
+    if isinstance(timeout, int):
+        return {"fast": timeout, "deep": timeout}
+    return dict(timeout)
+
 
 _STATUS_KINDS = {
     429: ErrorKind.RATE_LIMIT,
@@ -120,7 +130,7 @@ MODEL_LISTS = {
 
 class ApiAgent(Agent):
     def __init__(self, name, provider, model=None, api_key_env=None,
-                 base_url=None, timeout=180):
+                 base_url=None, timeout=None):
         super().__init__(name)
         if provider not in DRIVERS:
             raise ValueError(f"unknown provider: {provider}")
@@ -128,7 +138,7 @@ class ApiAgent(Agent):
         self.model = model  # optional pin; None means auto-select per task
         self.api_key_env = api_key_env
         self.base_url = base_url
-        self.timeout = timeout
+        self.timeout = _normalize_timeout(timeout)
         self._available: list[str] | None = None  # discovered lazily
 
     def ask(self, prompt: str, task: str = models.DEEP) -> Reply:
@@ -141,7 +151,7 @@ class ApiAgent(Agent):
         build, parse = DRIVERS[self.provider]
         model = self._model_for(task, api_key)
         url, headers, body = build(model, self.base_url, api_key, prompt)
-        data = self._request(url, headers, body)
+        data = self._request(url, headers, body, timeout=self.timeout.get(task))
         try:
             return Reply(text=parse(data).strip(), model=model)
         except (KeyError, IndexError, TypeError, AttributeError) as e:
@@ -156,7 +166,7 @@ class ApiAgent(Agent):
         if self._available is None:
             list_request, list_parse = MODEL_LISTS[self.provider]
             url, headers = list_request(self.base_url, api_key)
-            data = self._request(url, headers)
+            data = self._request(url, headers, timeout=MODELS_DISCOVERY_TIMEOUT)
             try:
                 available = list_parse(data)
             except (KeyError, TypeError, AttributeError) as e:
@@ -172,7 +182,7 @@ class ApiAgent(Agent):
             self._available = available
         return models.choose_model(self._available, task) or self._available[0]
 
-    def _request(self, url, headers, body=None):
+    def _request(self, url, headers, body=None, *, timeout):
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode() if body is not None else None,
@@ -180,7 +190,7 @@ class ApiAgent(Agent):
             method="POST" if body is not None else "GET",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw_response = resp.read().decode()
         except urllib.error.HTTPError as e:
             raise AgentError(

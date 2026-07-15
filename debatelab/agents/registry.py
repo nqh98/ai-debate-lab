@@ -1,7 +1,7 @@
 """Loads agents.yaml into specs and builds enabled Agent instances."""
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -26,7 +26,53 @@ class AgentSpec:
     model: str | None = None  # optional pin; omit to auto-select per task
     api_key_env: str | None = None
     base_url: str | None = None
-    timeout: int = 180
+    timeout: dict = field(
+        default_factory=lambda: {"fast": None, "deep": None}
+    )
+    workspace_args: list | None = None
+    stall_after: dict = field(
+        default_factory=lambda: {"fast": 300, "deep": 900}
+    )
+
+
+def _parse_task_seconds(raw, *, field_name, path, name,
+                        default_fast, default_deep):
+    """Normalize an int-or-{fast,deep} YAML value to a per-tier dict.
+
+    Absent -> the given defaults. A bare int applies to both tiers. A map
+    may set either tier to an int or null."""
+    if raw is None:
+        return {"fast": default_fast, "deep": default_deep}
+    if isinstance(raw, bool):
+        raise ConfigError(
+            f"{path}: agent '{name}': {field_name} must be a number or "
+            f"a {{fast, deep}} map"
+        )
+    if isinstance(raw, int):
+        return {"fast": raw, "deep": raw}
+    if isinstance(raw, dict):
+        unknown = set(raw) - {"fast", "deep"}
+        if unknown:
+            raise ConfigError(
+                f"{path}: agent '{name}': {field_name} has unknown "
+                f"key(s): {', '.join(sorted(unknown))}"
+            )
+        out = {}
+        for tier, default in (("fast", default_fast), ("deep", default_deep)):
+            value = raw.get(tier, default)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int)
+            ):
+                raise ConfigError(
+                    f"{path}: agent '{name}': {field_name}.{tier} must be "
+                    f"a number or null"
+                )
+            out[tier] = value
+        return out
+    raise ConfigError(
+        f"{path}: agent '{name}': {field_name} must be a number or "
+        f"a {{fast, deep}} map"
+    )
 
 
 def load_agent_specs(path) -> list[AgentSpec]:
@@ -46,6 +92,15 @@ def load_agent_specs(path) -> list[AgentSpec]:
             raise ConfigError(
                 f"{path}: agent '{name}': backend must be 'cli', 'api', or 'auto'"
             )
+        workspace_args = entry.get("workspace_args")
+        if workspace_args is not None and (
+            not isinstance(workspace_args, list)
+            or not all(isinstance(t, str) for t in workspace_args)
+        ):
+            raise ConfigError(
+                f"{path}: agent '{name}': workspace_args must be a "
+                f"list of strings"
+            )
         specs.append(
             AgentSpec(
                 name=name,
@@ -57,7 +112,17 @@ def load_agent_specs(path) -> list[AgentSpec]:
                 model=entry.get("model"),
                 api_key_env=entry.get("api_key_env"),
                 base_url=entry.get("base_url"),
-                timeout=int(entry.get("timeout", 180)),
+                timeout=_parse_task_seconds(
+                    entry.get("timeout"), field_name="timeout",
+                    path=path, name=name,
+                    default_fast=None, default_deep=None,
+                ),
+                workspace_args=workspace_args,
+                stall_after=_parse_task_seconds(
+                    entry.get("stall_after"), field_name="stall_after",
+                    path=path, name=name,
+                    default_fast=300, default_deep=900,
+                ),
             )
         )
     return specs
@@ -106,7 +171,7 @@ def resolve_backend(spec: AgentSpec) -> str:
     return "cli" if _cli_problem(spec) is None else "api"
 
 
-def build_agents(specs: list[AgentSpec]) -> list[Agent]:
+def build_agents(specs: list[AgentSpec], workdir: str | None = None) -> list[Agent]:
     agents = []
     for spec in specs:
         if not spec.enabled:
@@ -115,20 +180,17 @@ def build_agents(specs: list[AgentSpec]) -> list[Agent]:
         if problem:
             raise ConfigError(f"agent '{spec.name}': {problem}")
         if resolve_backend(spec) == "cli":
-            agents.append(
-                CliAgent(
-                    spec.name, spec.command, spec.timeout, spec.models_command
-                )
+            agent = CliAgent(
+                spec.name, spec.command, spec.timeout, spec.models_command,
+                workdir=workdir, workspace_args=spec.workspace_args,
             )
+            agent.workspace_attached = workdir is not None
         else:
-            agents.append(
-                ApiAgent(
-                    spec.name,
-                    spec.provider,
-                    spec.model,
-                    spec.api_key_env,
-                    spec.base_url,
-                    spec.timeout,
-                )
+            agent = ApiAgent(
+                spec.name, spec.provider, spec.model, spec.api_key_env,
+                spec.base_url, spec.timeout,
             )
+            agent.workspace_attached = False
+        agent.stall_after = dict(spec.stall_after)
+        agents.append(agent)
     return agents

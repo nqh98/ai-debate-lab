@@ -33,6 +33,9 @@
   .badge.approved, .badge.awaiting_human { color:var(--ok); }
   .badge.rejected, .badge.error, .badge.no_consensus { color:var(--bad); }
   .badge.running { color:var(--accent); }
+  .badge.stalled { color:var(--bad); border-color:var(--bad); }
+  .badge.stale { color:var(--bad); background:var(--card); }
+  .live { margin:10px 0; }
   a.debate-link { color:var(--fg); text-decoration:none; font-weight:600; }
   h2 { font-size:16px; margin:26px 0 6px; }
   h3 { font-size:14px; margin:0 0 6px; color:var(--accent); }
@@ -332,12 +335,41 @@ function renderTranscript(events) {
   }
   return html;
 }
+
+function liveState(live, nowMs, staleAfterMs) {
+  if (!live) return "none";
+  if (nowMs - Date.parse(live.updated) > staleAfterMs) return "stale";
+  if ((live.calls || []).some(c => c.stalled)) return "stalled";
+  return "running";
+}
+
+function liveMinutes(seconds) {
+  return Math.floor(seconds / 60) + "m";
+}
+
+function renderLive(live, nowMs, staleAfterMs) {
+  const state = liveState(live, nowMs, staleAfterMs);
+  if (state === "none") return "";
+  if (state === "stale") {
+    return '<div class="live"><span class="badge stale">' +
+      "run process not responding</span></div>";
+  }
+  const badges = (live.calls || []).map(c => {
+    const cls = c.stalled ? "badge stalled" : "badge running";
+    const verb = c.stalled ? "stalled" : "running";
+    return `<span class="${cls}">${esc(c.agent)} · ` +
+      `${verb} ${liveMinutes(c.elapsed_s)}</span>`;
+  });
+  const phase = esc(live.phase) + " · round " + esc(live.round);
+  return `<div class="live">⏱ ${phase} ${badges.join(" ")}</div>`;
+}
 </script>
 <script>
 const app = document.getElementById("app");
 const back = document.getElementById("back");
 let pollTimer = null;
 let routeGeneration = 0;
+const LIVE_STALE_MS = 120000; // 2 × the run's 60s heartbeat (spec §6)
 
 async function fetchJSON(url) {
   const r = await fetch(url + "?t=" + Date.now());
@@ -397,11 +429,12 @@ async function fetchJSONOptional(url) {
 
 async function showDebate(id, generation) {
   back.hidden = false;
-  let state, events, result;
+  let state, events, result, live;
   try {
     state = await fetchJSON(`/${id}/state.json`);
     events = await fetchJSONL(`/${id}/transcript.jsonl`);
     result = await fetchJSONOptional(`/${id}/result.json`);
+    live = await fetchJSONOptional(`/${id}/live.json`);
   } catch (e) {
     if (!isCurrent(id, generation)) return;
     app.innerHTML = `<p class="muted">failed to load ${esc(id)}: ${esc(String(e))}</p>`;
@@ -409,6 +442,8 @@ async function showDebate(id, generation) {
     return;
   }
   if (!isCurrent(id, generation)) return;
+  document.title = (liveState(live, Date.now(), LIVE_STALE_MS) === "stalled" ? "⚠ " : "") +
+    "AI Debate Lab";
   let html = `
     <div class="card banner row">
       <div><strong>${esc(state.title)}</strong><br>
@@ -418,6 +453,7 @@ async function showDebate(id, generation) {
       </div>
       ${badge(state.status)}
     </div>`;
+  html += renderLive(live, Date.now(), LIVE_STALE_MS);
   html += renderHero(result);
   if (state.human_decision) {
     html += `<div class="card banner"><h3>Human decision: ${esc(state.human_decision.decision).toUpperCase()}</h3>

@@ -349,3 +349,20 @@ def test_root_lock_does_not_block_on_an_unrelated_debate_lock(tmp_path):
         t.start()
         assert done.wait(5), "rebuild_index blocked on an unrelated debate lock"
         t.join(5)
+
+
+def test_create_with_workspace_records_pin(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    ws = {"source": "/some/repo", "commit": "a" * 40}
+    did = store.create("t", "p", workspace=ws)
+    assert store.read_state(did)["workspace"] == ws
+    assert store.read_events(did)[0]["workspace"] == ws
+
+
+def test_create_without_workspace_has_no_key(tmp_path):
+    """Plain debates must stay byte-compatible: no workspace key at all,
+    or fsck diverges on every debate created before this feature."""
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("t", "p")
+    assert "workspace" not in store.read_state(did)
+    assert "workspace" not in store.read_events(did)[0]

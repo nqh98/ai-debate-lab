@@ -36,6 +36,7 @@ AUDIT_ONLY = frozenset({
     "fallback_candidate",
     "roster_changed",
     "synthesis_failed",
+    "workspace_ready",
 })
 
 
@@ -67,6 +68,8 @@ def _debate_created(st, e):
     # was created must not rewrite what this debate actually ran with.
     st["max_rounds"] = e["max_rounds"]
     st["quorum"] = e["quorum"]
+    if "workspace" in e:
+        st["workspace"] = e["workspace"]
 
 
 def _run_config(st, e):

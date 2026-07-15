@@ -55,7 +55,7 @@ def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "agents.yaml").write_text("agents: []\n")
     monkeypatch.setattr(registry, "load_agent_specs", lambda path: [])
-    monkeypatch.setattr(registry, "build_agents", lambda specs: scripted_agents())
+    monkeypatch.setattr(registry, "build_agents", lambda specs, workdir=None: scripted_agents())
     return tmp_path
 
 
@@ -105,7 +105,7 @@ def test_no_consensus_candidate_can_be_approved_and_returned(workdir, capsys, mo
             "NOMINATE: alpha", "VOTE: reject\\nno",
         ]),
     ]
-    monkeypatch.setattr(registry, "build_agents", lambda specs: agents)
+    monkeypatch.setattr(registry, "build_agents", lambda specs, workdir=None: agents)
     cli.main(["new", "Which database should we use?"])
     debate_id = capsys.readouterr().out.strip()
 
@@ -214,7 +214,7 @@ def test_reject_reasons_reach_round_two_prompts(workdir, capsys, monkeypatch):
     debate_id = capsys.readouterr().out.strip()
     # Patch build_agents to return this exact list so we can inspect prompts.
     agents = scripted_agents()
-    monkeypatch.setattr(registry, "build_agents", lambda specs: agents)
+    monkeypatch.setattr(registry, "build_agents", lambda specs, workdir=None: agents)
     cli.main(["run", debate_id])
     capsys.readouterr()
     alpha = agents[0]

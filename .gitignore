@@ -7,3 +7,5 @@ debates/
 .superpowers/
 .worktrees/
 .superpowers/
+debates/*/workspace/
+debates/*/live.json

@@ -1,14 +1,16 @@
 import json
+import shutil
 from contextlib import contextmanager
 from fractions import Fraction
 
 import pytest
 
-from debatelab import cli
+from debatelab import cli, workspace
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
 from .conftest import happy_agent, make_store
+from .test_workspace import make_repo
 
 
 @pytest.fixture
@@ -208,7 +210,7 @@ def test_run_uses_terminal_status_exit_codes(
 
     monkeypatch.setattr(cli, "get_store", lambda: store)
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -239,7 +241,7 @@ def test_run_exits_one_for_a_predecided_debate(
 
     monkeypatch.setattr(cli, "get_store", lambda: store)
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -392,7 +394,7 @@ def test_run_forwards_force_to_store_lock(workdir, capsys, monkeypatch):
     monkeypatch.setattr(DebateStore, "debate_lock", lambda self, *args, **kwargs:
                         debate_lock(*args, **kwargs))
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -422,7 +424,7 @@ def test_run_forwards_quorum_to_orchestrator(workdir, capsys, monkeypatch):
 
     monkeypatch.setattr(cli, "get_store", lambda: store)
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -735,3 +737,80 @@ def test_approve_releases_the_lock_when_it_finishes(workdir, capsys):
     store, debate_id = _make_awaiting(workdir, capsys)
     cli.main(["approve", debate_id, "-m", "ok"])
     assert not (workdir / "debates" / debate_id / "debate.lock").exists()
+
+
+def test_new_with_repo_pins_workspace(workdir, capsys):
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    state = json.loads((workdir / "debates" / did / "state.json").read_text())
+    assert state["workspace"]["source"] == str(repo.resolve())
+    assert len(state["workspace"]["commit"]) == 40
+
+
+def test_new_with_bad_repo_exits_with_error(workdir, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["new", "problem text", "--repo", str(workdir / "nope")])
+
+
+def write_two_agent_config(tmp_path):
+    p = tmp_path / "agents.yaml"
+    p.write_text(
+        "agents:\n"
+        "  - name: a\n    backend: cli\n    command: [\"echo\", \"{prompt}\"]\n"
+        "  - name: b\n    backend: cli\n    command: [\"echo\", \"{prompt}\"]\n"
+    )
+    return str(p)
+
+
+def test_run_halts_when_workspace_source_is_gone(workdir, capsys):
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    shutil.rmtree(repo)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", did, "--config", write_two_agent_config(workdir)])
+    assert exc.value.code == 3
+    state = json.loads((workdir / "debates" / did / "state.json").read_text())
+    assert state["status"] == "error"
+    events = [
+        json.loads(line)
+        for line in (workdir / "debates" / did / "transcript.jsonl")
+        .read_text().splitlines()
+    ]
+    assert events[-1]["type"] == "error"
+
+
+def test_decision_removes_workspace(workdir, capsys):
+    """approve on a grounded debate tears the worktree down (spec §2)."""
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    debate_dir = workdir / "debates" / did
+    # put the debate into a decidable state without running agents
+    state = json.loads((debate_dir / "state.json").read_text())
+    state["status"] = "awaiting_human"
+    (debate_dir / "state.json").write_text(json.dumps(state))
+    ws = workspace.materialize(state["workspace"], debate_dir)[0]
+    assert ws.exists()
+    cli.main(["approve", did, "-m", "ok"])
+    assert not ws.exists()
+
+
+def test_run_banner_names_attachment(workdir, capsys):
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    config = workdir / "agents.yaml"
+    config.write_text(
+        "agents:\n"
+        "  - name: a\n    backend: cli\n"
+        "    command: [\"echo\", \"{prompt}\"]\n"
+        "    workspace_args: [\"--flag\"]\n"
+        "  - name: b\n    backend: cli\n"
+        "    command: [\"echo\", \"{prompt}\"]\n"
+    )
+    cli.main(["run", did, "--config", str(config), "--max-rounds", "1"])
+    out = capsys.readouterr().out
+    assert "agent 'a': workspace-attached (--flag)" in out
+    assert "agent 'b': workspace-attached (no extra flags)" in out

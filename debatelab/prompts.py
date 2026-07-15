@@ -10,6 +10,29 @@ NOMINATE_REQUIRED = "'NOMINATE: <agent-name>'"
 # tests/conftest.py's MockAgent) tells a synthesis prompt from the others.
 SYNTHESIS_HEADER = "Proposals to merge:"
 
+UNATTACHED_NOTICE = (
+    "The other agents in this debate can read the repository under "
+    "discussion and run its tests; you cannot. Weigh their file:line "
+    "citations and test results as evidence. Do not assert facts about "
+    "file contents you have not seen quoted.\n\n"
+)
+
+
+def workspace_preamble(commit: str) -> str:
+    return (
+        "The repository under discussion is checked out at your current "
+        f"working directory (commit {commit}). Read the code and run "
+        "verification commands (tests, linters) to check claims — yours "
+        "and the other agents' — before asserting them. Cite evidence "
+        "as file:line.\n\n"
+    )
+
+
+def ground_problem(problem: str, attached: bool, commit: str) -> str:
+    """Preface the problem for one agent of a repo-grounded debate."""
+    preface = workspace_preamble(commit) if attached else UNATTACHED_NOTICE
+    return preface + problem
+
 
 def format_blocks(items: dict[str, str]) -> str:
     return "\n\n".join(f"### {name}\n{text}" for name, text in items.items())

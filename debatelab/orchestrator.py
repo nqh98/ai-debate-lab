@@ -36,7 +36,7 @@ class DebateHalted(Exception):
 
 class Orchestrator:
     def __init__(self, store, agents, progress=lambda msg: None,
-                 sleep=None, rng=None):
+                 sleep=None, rng=None, live=None):
         if len(agents) < 2:
             raise ValueError("a debate needs at least 2 agents")
         self.store = store
@@ -45,6 +45,7 @@ class Orchestrator:
         self.progress = progress
         self.sleep = sleep or DEFAULT_SLEEP
         self.rng = rng or random.Random()
+        self.live = live
 
     def run(self, debate_id: str, max_rounds: int | None = None,
             quorum: Fraction | None = None) -> str:
@@ -86,7 +87,19 @@ class Orchestrator:
             "loaded_status": loaded_status,
             "loaded_state_sha256": loaded_state_sha256,
         })
-        problem = self.store.read_problem(debate_id)
+        raw_problem = self.store.read_problem(debate_id)
+        workspace = state.get("workspace")
+        if workspace:
+            problem = {
+                name: prompts.ground_problem(
+                    raw_problem,
+                    self.agents[name].workspace_attached,
+                    workspace["commit"],
+                )
+                for name in self.order
+            }
+        else:
+            problem = {name: raw_problem for name in self.order}
         try:
             while True:
                 rnd, phase = protocol.next_phase(
@@ -113,6 +126,8 @@ class Orchestrator:
                 if phase == "nominate":
                     state["candidate"] = None
                 self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
+                if self.live:
+                    self.live.set_phase(rnd, phase)
                 # Brackets the two assignments a reader must reproduce. Without
                 # phase_completed, a phase that raised DebateHalted is
                 # indistinguishable from one that finished; without
@@ -200,6 +215,25 @@ class Orchestrator:
 
         return on_attempt
 
+    def _call_agent(self, debate_id, state, phase, name, prompt, task):
+        """One retried agent call, reported to live status while in flight."""
+        if self.live:
+            self.live.call_started(
+                name, task, self.agents[name].stall_after.get(task)
+            )
+        try:
+            return retry.call_with_retry(
+                lambda: self.agents[name].ask(prompt, task),
+                rng=self.rng,
+                sleep=self.sleep,
+                on_attempt=self._record_call(
+                    debate_id, state, phase, name, task
+                ),
+            )
+        finally:
+            if self.live:
+                self.live.call_finished(name)
+
     def _reask(self, debate_id, state, phase, name, prompt, parse, required,
                task):
         """Ask one agent again after an unparseable reply.
@@ -208,15 +242,9 @@ class Orchestrator:
         Re-asks run serially because they are rare, cheap FAST requests.
         """
         try:
-            reply = retry.call_with_retry(
-                lambda: self.agents[name].ask(
-                    prompts.reask(prompt, required), task
-                ),
-                rng=self.rng,
-                sleep=self.sleep,
-                on_attempt=self._record_call(
-                    debate_id, state, phase, name, task
-                ),
+            reply = self._call_agent(
+                debate_id, state, phase, name,
+                prompts.reask(prompt, required), task,
             )
         except AgentError:
             return None, None
@@ -240,14 +268,7 @@ class Orchestrator:
         as a value. See specs/2026-07-15-synthesis-phase-design.md §5.
         """
         try:
-            reply = retry.call_with_retry(
-                lambda: self.agents[name].ask(prompt, task),
-                rng=self.rng,
-                sleep=self.sleep,
-                on_attempt=self._record_call(
-                    debate_id, state, phase, name, task
-                ),
-            )
+            reply = self._call_agent(debate_id, state, phase, name, prompt, task)
         except AgentError as e:
             return None, str(e)
         return reply.text, None
@@ -258,14 +279,8 @@ class Orchestrator:
         results = {}
 
         def call(name):
-            prompt = prompt_for(name)
-            reply = retry.call_with_retry(
-                lambda: self.agents[name].ask(prompt, task),
-                rng=self.rng,
-                sleep=self.sleep,
-                on_attempt=self._record_call(
-                    debate_id, state, phase, name, task
-                ),
+            reply = self._call_agent(
+                debate_id, state, phase, name, prompt_for(name), task
             )
             return reply.text
 
@@ -288,7 +303,7 @@ class Orchestrator:
     def _phase_propose(self, debate_id, state, problem):
         results = self._fanout(
             debate_id, state, "propose",
-            lambda name: prompts.propose_prompt(name, problem),
+            lambda name: prompts.propose_prompt(name, problem[name]),
         )
         state["proposals"] = results
         for name, text in results.items():
@@ -304,7 +319,7 @@ class Orchestrator:
         def prompt_for(name):
             others = {n: t for n, t in proposals.items() if n != name}
             return prompts.critique_prompt(
-                name, problem, others, reject_reasons or None
+                name, problem[name], others, reject_reasons or None
             )
 
         results = self._fanout(debate_id, state, "critique", prompt_for)
@@ -318,7 +333,9 @@ class Orchestrator:
     def _phase_revise(self, debate_id, state, problem):
         def prompt_for(name):
             own = state["proposals"].get(name, "(no previous proposal)")
-            return prompts.revise_prompt(name, problem, own, state["critiques"])
+            return prompts.revise_prompt(
+                name, problem[name], own, state["critiques"]
+            )
 
         results = self._fanout(debate_id, state, "revise", prompt_for)
         state["proposals"] = {**state["proposals"], **results}
@@ -333,7 +350,9 @@ class Orchestrator:
         names = list(proposals)
         nom_raw = self._fanout(
             debate_id, state, "nominate",
-            lambda name: prompts.nominate_prompt(name, problem, proposals, names),
+            lambda name: prompts.nominate_prompt(
+                name, problem[name], proposals, names
+            ),
             task=models.FAST,
         )
         nominations = {}
@@ -349,7 +368,9 @@ class Orchestrator:
                     state,
                     "nominate",
                     name,
-                    prompts.nominate_prompt(name, problem, proposals, names),
+                    prompts.nominate_prompt(
+                        name, problem[name], proposals, names
+                    ),
                     lambda t: prompts.parse_nomination(t, names),
                     prompts.NOMINATE_REQUIRED,
                     models.FAST,
@@ -401,7 +422,7 @@ class Orchestrator:
         text, error = self._ask_one(
             debate_id, state, "synthesize", winner,
             prompts.synthesize_prompt(
-                winner, problem, state["proposals"], state["critiques"],
+                winner, problem[winner], state["proposals"], state["critiques"],
                 self._reject_reasons(state) or None,
             ),
             models.DEEP,
@@ -436,7 +457,7 @@ class Orchestrator:
         vote_raw = self._fanout(
             debate_id, state, "vote",
             lambda name: prompts.vote_prompt(
-                name, problem, winner, candidate_text
+                name, problem[name], winner, candidate_text
             ),
             task=models.FAST,
         )
@@ -449,7 +470,9 @@ class Orchestrator:
                     state,
                     "vote",
                     name,
-                    prompts.vote_prompt(name, problem, winner, candidate_text),
+                    prompts.vote_prompt(
+                        name, problem[name], winner, candidate_text
+                    ),
                     prompts.parse_vote,
                     prompts.VOTE_REQUIRED,
                     models.FAST,
