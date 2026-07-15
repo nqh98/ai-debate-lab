@@ -192,7 +192,9 @@ def make_server(port: int, directory: str) -> http.server.ThreadingHTTPServer:
 
 
 def cmd_serve(args):
-    srv = make_server(args.port, str(Path.cwd()))
+    root = get_store().root
+    root.mkdir(parents=True, exist_ok=True)
+    srv = make_server(args.port, str(root))
     print(
         f"viewer at http://127.0.0.1:{srv.server_address[1]}/ "
         "(Ctrl-C to stop)"

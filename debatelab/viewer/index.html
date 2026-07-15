@@ -88,7 +88,7 @@ function badge(status) {
 async function showList() {
   back.hidden = true;
   let entries = [];
-  try { entries = await fetchJSON("/debates/index.json"); }
+  try { entries = await fetchJSON("/index.json"); }
   catch { app.innerHTML = "<p class='muted'>No debates yet.</p>"; return; }
   if (!entries.length) {
     app.innerHTML = "<p class='muted'>No debates yet.</p>";
@@ -128,8 +128,8 @@ async function showDebate(id, generation) {
   back.hidden = false;
   let state, events;
   try {
-    state = await fetchJSON(`/debates/${id}/state.json`);
-    events = await fetchJSONL(`/debates/${id}/transcript.jsonl`);
+    state = await fetchJSON(`/${id}/state.json`);
+    events = await fetchJSONL(`/${id}/transcript.jsonl`);
   } catch (e) {
     if (!isCurrent(id, generation)) return;
     app.innerHTML = `<p class="muted">failed to load ${esc(id)}: ${esc(String(e))}</p>`;
