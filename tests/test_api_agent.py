@@ -69,7 +69,7 @@ def test_openai_driver_roundtrip(server, monkeypatch):
     monkeypatch.setenv("TEST_KEY", "sk-test")
     Recorder.payload = {"choices": [{"message": {"content": " hi there "}}]}
     agent = ApiAgent("gpt", "openai", "gpt-5", "TEST_KEY", base_url=server)
-    assert agent.ask("hello") == "hi there"
+    assert agent.ask("hello").text == "hi there"
     call = Recorder.calls[0]
     assert call["path"] == "/chat/completions"
     assert call["headers"]["Authorization"] == "Bearer sk-test"
@@ -81,7 +81,7 @@ def test_anthropic_driver_roundtrip(server, monkeypatch):
     monkeypatch.setenv("TEST_KEY", "sk-ant")
     Recorder.payload = {"content": [{"type": "text", "text": "claude says hi"}]}
     agent = ApiAgent("cl", "anthropic", "claude-fable-5", "TEST_KEY", base_url=server)
-    assert agent.ask("hello") == "claude says hi"
+    assert agent.ask("hello").text == "claude says hi"
     call = Recorder.calls[0]
     assert call["path"] == "/v1/messages"
     assert call["headers"]["X-Api-Key"] == "sk-ant"
@@ -94,7 +94,7 @@ def test_google_driver_roundtrip(server, monkeypatch):
         "candidates": [{"content": {"parts": [{"text": "gemini says hi"}]}}]
     }
     agent = ApiAgent("gm", "google", "gemini-pro", "TEST_KEY", base_url=server)
-    assert agent.ask("hello") == "gemini says hi"
+    assert agent.ask("hello").text == "gemini says hi"
     call = Recorder.calls[0]
     assert call["path"] == "/v1beta/models/gemini-pro:generateContent"
     assert call["headers"]["X-Goog-Api-Key"] == "g-key"
@@ -144,8 +144,8 @@ def test_no_model_discovers_and_selects_per_task(server, monkeypatch):
     }
     Recorder.payload = {"choices": [{"message": {"content": "ok"}}]}
     agent = ApiAgent("gpt", "openai", None, "TEST_KEY", base_url=server)
-    assert agent.ask("hello", task=models.DEEP) == "ok"
-    assert agent.ask("hello", task=models.FAST) == "ok"
+    assert agent.ask("hello", task=models.DEEP).text == "ok"
+    assert agent.ask("hello", task=models.FAST).text == "ok"
     list_calls = [c for c in Recorder.calls if c["path"] == "/models"]
     chat_calls = [c for c in Recorder.calls if c["path"] == "/chat/completions"]
     assert len(list_calls) == 1  # discovery is cached
@@ -158,7 +158,7 @@ def test_no_model_falls_back_to_first_listed(server, monkeypatch):
     Recorder.models_payload = {"data": [{"id": "model-a"}, {"id": "model-b"}]}
     Recorder.payload = {"choices": [{"message": {"content": "ok"}}]}
     agent = ApiAgent("gpt", "openai", None, "TEST_KEY", base_url=server)
-    assert agent.ask("hello") == "ok"
+    assert agent.ask("hello").text == "ok"
     chat = [c for c in Recorder.calls if c["path"] == "/chat/completions"][0]
     assert chat["body"]["model"] == "model-a"
 
@@ -180,7 +180,7 @@ def test_google_model_discovery_strips_prefix(server, monkeypatch):
         "candidates": [{"content": {"parts": [{"text": "ok"}]}}]
     }
     agent = ApiAgent("gm", "google", None, "TEST_KEY", base_url=server)
-    assert agent.ask("hello", task=models.FAST) == "ok"
+    assert agent.ask("hello", task=models.FAST).text == "ok"
     chat = [c for c in Recorder.calls if ":generateContent" in c["path"]][0]
     assert chat["path"] == "/v1beta/models/g-flash:generateContent"
 
@@ -189,7 +189,7 @@ def test_pinned_model_skips_discovery(server, monkeypatch):
     monkeypatch.setenv("TEST_KEY", "k")
     Recorder.payload = {"choices": [{"message": {"content": "ok"}}]}
     agent = ApiAgent("gpt", "openai", "pinned", "TEST_KEY", base_url=server)
-    assert agent.ask("hello") == "ok"
+    assert agent.ask("hello").text == "ok"
     assert all(c["path"] != "/models" for c in Recorder.calls)
 
 
@@ -315,3 +315,19 @@ def test_unreachable_host_is_timeout_and_retryable(monkeypatch):
         agent.ask("hello")
     assert exc.value.kind is ErrorKind.TIMEOUT
     assert exc.value.retryable is True
+
+
+def test_api_agent_reply_carries_the_pinned_model(monkeypatch):
+    """A pinned model needs no discovery, and the reply reports what was sent."""
+    monkeypatch.setenv("KEY", "k")
+    agent = ApiAgent("a", "openai", model="gpt-5", api_key_env="KEY")
+    monkeypatch.setattr(
+        ApiAgent,
+        "_request",
+        lambda self, url, headers, body=None: {
+            "choices": [{"message": {"content": "hi"}}]
+        },
+    )
+    reply = agent.ask("prompt")
+    assert reply.text == "hi"
+    assert reply.model == "gpt-5"

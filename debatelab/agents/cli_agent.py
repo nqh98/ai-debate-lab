@@ -2,7 +2,7 @@
 import subprocess
 
 from . import models
-from .base import Agent, AgentError, ErrorKind
+from .base import Agent, AgentError, ErrorKind, Reply
 
 
 class CliAgent(Agent):
@@ -19,8 +19,9 @@ class CliAgent(Agent):
         self.models_command = models_command
         self._available: list[str] | None = None  # discovered lazily
 
-    def ask(self, prompt: str, task: str = models.DEEP) -> str:
-        cmd = self._build_command(prompt, task)
+    def ask(self, prompt: str, task: str = models.DEEP) -> Reply:
+        model = self._model_for(task)
+        cmd = self._build_command(prompt, model)
         try:
             proc = subprocess.run(
                 cmd,
@@ -44,13 +45,12 @@ class CliAgent(Agent):
                 f"{self.name}: exit {proc.returncode}: {proc.stderr.strip()[:500]}",
                 kind=ErrorKind.UNKNOWN,
             )
-        return proc.stdout.strip()
+        return Reply(text=proc.stdout.strip(), model=model)
 
-    def _build_command(self, prompt: str, task: str) -> list[str]:
+    def _build_command(self, prompt: str, model: str | None) -> list[str]:
         """Substitute {prompt} and {model}. A token containing {model} is
         dropped entirely when no model was selected, so the CLI falls back
         to its own default routing."""
-        model = self._model_for(task)
         cmd = []
         for part in self.command:
             if "{model}" in part:

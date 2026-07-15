@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 
 from . import models
-from .base import Agent, AgentError, ErrorKind
+from .base import Agent, AgentError, ErrorKind, Reply
 
 
 _STATUS_KINDS = {
@@ -131,7 +131,7 @@ class ApiAgent(Agent):
         self.timeout = timeout
         self._available: list[str] | None = None  # discovered lazily
 
-    def ask(self, prompt: str, task: str = models.DEEP) -> str:
+    def ask(self, prompt: str, task: str = models.DEEP) -> Reply:
         api_key = os.environ.get(self.api_key_env, "")
         if not api_key:
             raise AgentError(
@@ -139,12 +139,11 @@ class ApiAgent(Agent):
                 kind=ErrorKind.AUTH,
             )
         build, parse = DRIVERS[self.provider]
-        url, headers, body = build(
-            self._model_for(task, api_key), self.base_url, api_key, prompt
-        )
+        model = self._model_for(task, api_key)
+        url, headers, body = build(model, self.base_url, api_key, prompt)
         data = self._request(url, headers, body)
         try:
-            return parse(data).strip()
+            return Reply(text=parse(data).strip(), model=model)
         except (KeyError, IndexError, TypeError, AttributeError) as e:
             raise AgentError(
                 f"{self.name}: unexpected response shape: {e!r}",

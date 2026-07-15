@@ -24,13 +24,13 @@ def test_cli_agent_is_an_agent(tmp_path):
 def test_cli_agent_returns_stripped_stdout(tmp_path):
     script = make_script(tmp_path, 'echo "reply to: $1"')
     agent = CliAgent("stub", [script, "{prompt}"])
-    assert agent.ask("hello") == "reply to: hello"
+    assert agent.ask("hello").text == "reply to: hello"
 
 
 def test_cli_agent_substitutes_prompt_inside_arg(tmp_path):
     script = make_script(tmp_path, 'echo "$1"')
     agent = CliAgent("stub", [script, "prefix {prompt} suffix"])
-    assert agent.ask("MID") == "prefix MID suffix"
+    assert agent.ask("MID").text == "prefix MID suffix"
 
 
 def test_cli_agent_nonzero_exit_raises(tmp_path):
@@ -60,7 +60,7 @@ def test_cli_agent_does_not_inherit_open_stdin(tmp_path):
     script = make_script(tmp_path, 'echo "got:$(cat)"')
     code = (
         "from debatelab.agents.cli_agent import CliAgent\n"
-        f"print(CliAgent('x', [{script!r}, '{{prompt}}'], timeout=3).ask('hi'))\n"
+        f"print(CliAgent('x', [{script!r}, '{{prompt}}'], timeout=3).ask('hi').text)\n"
     )
     proc = subprocess.Popen(
         [sys.executable, "-c", code],
@@ -134,7 +134,7 @@ def make_models_script(tmp_path, lines):
 def test_model_token_dropped_without_models_command(tmp_path):
     script = make_script(tmp_path, 'echo "args:$*"')
     agent = CliAgent("stub", [script, "--model={model}", "{prompt}"])
-    assert agent.ask("hi") == "args:hi"
+    assert agent.ask("hi").text == "args:hi"
 
 
 def test_model_selected_per_task(tmp_path):
@@ -143,8 +143,8 @@ def test_model_selected_per_task(tmp_path):
     agent = CliAgent(
         "stub", [script, "--model={model}", "{prompt}"], models_command=[lister]
     )
-    assert agent.ask("hi", task=DEEP) == "args:--model=big-pro hi"
-    assert agent.ask("hi", task=FAST) == "args:--model=tiny-mini hi"
+    assert agent.ask("hi", task=DEEP).text == "args:--model=big-pro hi"
+    assert agent.ask("hi", task=FAST).text == "args:--model=tiny-mini hi"
 
 
 def test_model_token_dropped_when_names_carry_no_signal(tmp_path):
@@ -153,7 +153,7 @@ def test_model_token_dropped_when_names_carry_no_signal(tmp_path):
     agent = CliAgent(
         "stub", [script, "--model={model}", "{prompt}"], models_command=[lister]
     )
-    assert agent.ask("hi") == "args:hi"
+    assert agent.ask("hi").text == "args:hi"
 
 
 def test_failing_models_command_falls_back_to_default(tmp_path):
@@ -163,7 +163,7 @@ def test_failing_models_command_falls_back_to_default(tmp_path):
         [script, "--model={model}", "{prompt}"],
         models_command=["/no/such/binary"],
     )
-    assert agent.ask("hi") == "args:hi"
+    assert agent.ask("hi").text == "args:hi"
 
 
 def test_models_command_runs_once_and_is_cached(tmp_path):
@@ -183,3 +183,45 @@ def test_models_command_runs_once_and_is_cached(tmp_path):
     agent.ask("one", task=DEEP)
     agent.ask("two", task=FAST)
     assert counter.read_text().count("x") == 1
+
+
+def test_cli_agent_reply_carries_no_model_when_it_routes_itself(tmp_path):
+    """None is a fact, not a hole: it says the CLI picked its own model."""
+    script = make_script(tmp_path, 'echo "reply"')
+    agent = CliAgent("stub", [script, "{prompt}"])
+    reply = agent.ask("hello")
+    assert reply.text == "reply"
+    assert reply.model is None
+
+
+def test_cli_agent_reply_carries_the_resolved_model(tmp_path):
+    script = make_script(tmp_path, 'echo "reply"')
+    lister = make_script(tmp_path, 'echo "gemini-3-pro"; echo "gemini-3-flash"')
+    agent = CliAgent(
+        "stub", [script, "--model={model}", "{prompt}"], models_command=[lister]
+    )
+    assert agent.ask("hello", DEEP).model == "gemini-3-pro"
+
+
+def test_cli_agent_routes_deep_and_fast_to_different_models(tmp_path):
+    """The assertion the model field exists for: choose_model's DEEP/FAST
+    routing is otherwise unverifiable from a transcript."""
+    script = make_script(tmp_path, 'echo "reply"')
+    lister = make_script(tmp_path, 'echo "gemini-3-pro"; echo "gemini-3-flash"')
+    agent = CliAgent(
+        "stub", [script, "--model={model}", "{prompt}"], models_command=[lister]
+    )
+    deep = agent.ask("hello", DEEP).model
+    fast = agent.ask("hello", FAST).model
+    assert deep != fast
+    assert {deep, fast} == {"gemini-3-pro", "gemini-3-flash"}
+
+
+def test_reply_is_immutable():
+    from dataclasses import FrozenInstanceError
+
+    from debatelab.agents.base import Reply
+
+    reply = Reply(text="hi", model="m")
+    with pytest.raises(FrozenInstanceError):
+        reply.model = "other"

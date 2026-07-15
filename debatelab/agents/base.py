@@ -1,5 +1,6 @@
 """Minimal agent interface every backend adapter implements."""
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
 
 from . import models
@@ -39,12 +40,32 @@ class AgentError(Exception):
         return self.kind not in _PERMANENT
 
 
+@dataclass(frozen=True)
+class Reply:
+    """One agent call's result.
+
+    `model` is what the backend resolved for this call, or None when it was
+    left to route itself (a CLI with no models_command). None means "we
+    pinned nothing" and never "we forgot to look" -- which is why ask() is
+    abstract and returns this, rather than the model being available through
+    an optional accessor an adapter could decline to implement. A field with
+    two meanings, one of them a lie, is the defect that keeps `tokens` out.
+
+    Returning the model rather than exposing it also keeps it off any shared
+    object: _fanout calls the roster concurrently, and a value on the
+    caller's stack cannot be raced.
+    """
+
+    text: str
+    model: str | None = None
+
+
 class Agent(ABC):
     def __init__(self, name: str):
         self.name = name
 
     @abstractmethod
-    def ask(self, prompt: str, task: str = models.DEEP) -> str:
-        """Send a prompt, return the agent's text reply. Raises AgentError on
+    def ask(self, prompt: str, task: str = models.DEEP) -> Reply:
+        """Send a prompt, return the agent's reply. Raises AgentError on
         failure. `task` (models.DEEP or models.FAST) lets the backend pick
         the most appropriate model for the work."""
