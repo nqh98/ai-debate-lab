@@ -65,10 +65,11 @@ def nominate_prompt(
         f'You are agent "{name}" in a structured multi-agent debate.\n\n'
         f"Problem:\n{problem}\n\n"
         f"Current proposals:\n{format_blocks(proposals)}\n\n"
-        "Which single proposal (including your own) is closest to correct?\n"
+        "Which single proposal is closest to correct?\n"
+        "You may NOT nominate your own proposal.\n"
         "Reply with exactly one line in this format, then one sentence of "
         "reasoning:\nNOMINATE: <agent-name>\n"
-        f"Valid agent names: {', '.join(names)}"
+        f"Valid agent names: {', '.join(n for n in names if n != name)}"
     )
 
 
@@ -89,19 +90,14 @@ def vote_prompt(
 
 
 def parse_nomination(text: str, valid_names: list[str]) -> str | None:
+    """Return a valid agent named by a NOMINATE marker, or None."""
     match = re.search(r'NOMINATE:\s*"?([\w.-]+)', text, re.IGNORECASE)
     if match and match.group(1) in valid_names:
         return match.group(1)
-    for name in valid_names:
-        if re.search(rf"\b{re.escape(name)}\b", text):
-            return name
     return None
 
 
-def parse_vote(text: str) -> tuple[str, str]:
-    """Return the verdict and full text; unparseable replies count as reject."""
+def parse_vote(text: str) -> str | None:
+    """Return the marked verdict, or None when no VOTE marker is present."""
     match = re.search(r"VOTE:\s*(accept|reject)", text, re.IGNORECASE)
-    if match:
-        return match.group(1).lower(), text.strip()
-    first = next((line for line in text.splitlines() if line.strip()), "")
-    return ("accept" if "accept" in first.lower() else "reject"), text.strip()
+    return match.group(1).lower() if match else None

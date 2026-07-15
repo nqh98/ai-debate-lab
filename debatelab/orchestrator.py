@@ -74,6 +74,14 @@ class Orchestrator:
         self.store.write_state(debate_id, state)
         self.store.write_summary(debate_id, render_summary(state))
 
+    def _abstain(self, debate_id, state, phase, name, content, reason):
+        """Record an agent as abstaining for this phase."""
+        state["abstained"] = sorted(set(state["abstained"]) | {name})
+        self.store.append_event(debate_id, {
+            "round": state["round"], "phase": phase, "agent": name,
+            "type": "abstained", "content": content, "reason": reason,
+        })
+
     def _fanout(self, debate_id, state, phase, prompt_for,
                 task=models.DEEP) -> dict:
         """Ask every agent concurrently. One retry per agent; a second failure
@@ -168,6 +176,13 @@ class Orchestrator:
                 "type": "nomination", "content": text,
             })
             nominee = prompts.parse_nomination(text, names)
+            if nominee == name:
+                self.store.append_event(debate_id, {
+                    "round": state["round"], "phase": "vote", "agent": name,
+                    "type": "nomination_dropped", "content": text,
+                    "reason": "self-nomination",
+                })
+                continue
             if nominee:
                 nominations[name] = nominee
         order_with_proposals = [n for n in self.order if n in proposals]
@@ -186,8 +201,13 @@ class Orchestrator:
         )
         votes = {}
         for name, text in vote_raw.items():
-            verdict, reason = prompts.parse_vote(text)
-            votes[name] = {"vote": verdict, "reason": reason}
+            verdict = prompts.parse_vote(text)
+            if verdict is None:
+                self._abstain(
+                    debate_id, state, "vote", name, text, "unparseable vote"
+                )
+                continue
+            votes[name] = {"vote": verdict, "reason": text}
             self.store.append_event(debate_id, {
                 "round": state["round"], "phase": "vote", "agent": name,
                 "type": "vote", "verdict": verdict, "content": text,

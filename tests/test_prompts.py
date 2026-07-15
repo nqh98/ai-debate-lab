@@ -23,11 +23,14 @@ def test_revise_prompt_contains_own_and_critiques():
     assert "my old take" in p and "weak point X" in p and "Changes:" in p
 
 
-def test_nominate_prompt_lists_names_and_format():
+def test_nominate_prompt_forbids_self_and_excludes_self_from_valid_names():
     p = prompts.nominate_prompt(
         "alpha", "Q", {"alpha": "A", "beta": "B"}, ["alpha", "beta"]
     )
-    assert "NOMINATE:" in p and "alpha, beta" in p
+    assert "NOMINATE:" in p
+    assert "may NOT nominate your own" in p
+    assert "### alpha" in p
+    assert "Valid agent names: beta" in p
 
 
 def test_vote_prompt_contains_candidate():
@@ -35,19 +38,31 @@ def test_vote_prompt_contains_candidate():
     assert "VOTE:" in p and "the answer" in p and "beta" in p
 
 
-def test_parse_nomination_formats():
+def test_parse_nomination_reads_the_marker_line():
     names = ["alpha", "beta"]
     assert prompts.parse_nomination("NOMINATE: beta\nbecause...", names) == "beta"
     assert prompts.parse_nomination("nominate:   alpha", names) == "alpha"
-    assert prompts.parse_nomination("I think beta's plan wins", names) == "beta"
+
+
+def test_parse_nomination_never_guesses_from_prose():
+    names = ["alpha", "beta"]
+    assert prompts.parse_nomination("I think beta's plan is weakest", names) is None
     assert prompts.parse_nomination("no idea", names) is None
     assert prompts.parse_nomination("NOMINATE: gamma", names) is None
 
 
-def test_parse_vote_formats():
-    assert prompts.parse_vote("VOTE: accept\nlooks good")[0] == "accept"
-    assert prompts.parse_vote("vote: REJECT\nmissing X")[0] == "reject"
-    assert prompts.parse_vote("I accept this fine answer")[0] == "accept"
-    assert prompts.parse_vote("hmm not sure about this")[0] == "reject"
-    verdict, reason = prompts.parse_vote("VOTE: reject\nbad idea")
-    assert reason == "VOTE: reject\nbad idea"
+def test_parse_nomination_returns_self_so_caller_can_drop_it():
+    assert prompts.parse_nomination("NOMINATE: alpha", ["alpha", "beta"]) == "alpha"
+
+
+def test_parse_vote_reads_the_marker_line():
+    assert prompts.parse_vote("VOTE: accept\nlooks good") == "accept"
+    assert prompts.parse_vote("vote: REJECT\nmissing X") == "reject"
+
+
+def test_parse_vote_never_infers_a_verdict_from_prose():
+    assert prompts.parse_vote("I cannot accept this") is None
+    assert prompts.parse_vote("I do not accept") is None
+    assert prompts.parse_vote("I accept this fine answer") is None
+    assert prompts.parse_vote("hmm not sure about this") is None
+    assert prompts.parse_vote("") is None

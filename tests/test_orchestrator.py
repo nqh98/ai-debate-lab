@@ -173,3 +173,35 @@ def test_resume_after_vote_checkpoint_retains_consensus(tmp_path):
     empty_agents = [MockAgent("a", []), MockAgent("b", [])]
     assert Orchestrator(store, empty_agents).run(did) == "awaiting_human"
     assert store.read_state(did)["round"] == 1
+
+
+def test_unparseable_vote_abstains_instead_of_counting_as_accept(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", ["proposal a", "crit a", "rev a", "NOMINATE: b",
+                        "I cannot accept this"]),
+        MockAgent("b", ["proposal b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    types = [e["type"] for e in store.read_events(did)]
+    assert "abstained" in types
+    state = store.read_state(did)
+    assert "a" not in state["votes"]
+    assert state["abstained"] == ["a"]
+
+
+def test_self_nomination_is_dropped_and_recorded(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", ["proposal a", "crit a", "rev a", "NOMINATE: a",
+                        "VOTE: accept"]),
+        MockAgent("b", ["proposal b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    dropped = [e for e in store.read_events(did)
+               if e["type"] == "nomination_dropped"]
+    assert [e["agent"] for e in dropped] == ["a"]
