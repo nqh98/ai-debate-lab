@@ -13,6 +13,7 @@ this module introduces. The duplication is the feature; fsck is the
 differential test between the two. tests/test_replay_differential.py is what
 keeps them honest.
 """
+import copy
 
 
 class MissingGenesis(Exception):
@@ -147,21 +148,102 @@ def replay(events):
             "pre-genesis debate"
         )
     st = _initial()
-    # Critique and vote replace their dictionaries only after their fanouts
-    # complete. Reset lazily on the first emitted result, so a later halted
-    # phase preserves the prior round's dictionary just like Orchestrator.
-    reset_results = set()
-    for e in events:
+    _debate_created(st, events[0])
+    checkpointed = copy.deepcopy(st)
+    attempt = None
+    pending_checkpoint = None
+    superseded = None
+    resume_config = None
+
+    for e in events[1:]:
         kind = e.get("type")
         if kind in AUDIT_ONLY:
             continue
         fold = _FOLD.get(kind)
         if fold is None:
             raise UnknownEvent(f"no fold rule for event type {kind!r}")
-        if kind in ("critique", "vote"):
-            result_key = (kind, e["round"], e["phase"])
-            if result_key not in reset_results:
-                st[f"{kind}s"] = {}
-                reset_results.add(result_key)
+
+        if kind == "run_config":
+            # A new run loaded state.json. Keep the just-completed working
+            # state long enough for its first phase to prove whether that
+            # completion reached the checkpoint, then restart from the last
+            # state already known to be durable.
+            if pending_checkpoint is not None:
+                superseded = (copy.deepcopy(st), pending_checkpoint)
+            st = copy.deepcopy(checkpointed)
+            fold(st, e)
+            resume_config = e
+            pending_checkpoint = None
+            attempt = None
+            continue
+
+        if kind == "phase_started":
+            key = (e["round"], e["phase"])
+            if superseded is not None:
+                candidate, candidate_key = superseded
+                if key != candidate_key:
+                    # Resuming at a later phase proves the candidate phase was
+                    # checkpointed before the previous process stopped.
+                    checkpointed = copy.deepcopy(candidate)
+                    st = copy.deepcopy(candidate)
+                    _run_config(st, resume_config)
+                superseded = None
+            if pending_checkpoint is not None:
+                # Orchestrator cannot start another phase until the previous
+                # phase's checkpoint write has returned successfully.
+                checkpointed = copy.deepcopy(st)
+                pending_checkpoint = None
+            fold(st, e)
+            attempt = {
+                "key": key,
+                "critiques": {},
+                "votes": {},
+            }
+            continue
+
+        if kind in ("critique", "vote") and attempt is not None:
+            if attempt["key"] == (e["round"], e["phase"]):
+                if kind == "critique":
+                    attempt["critiques"][e["agent"]] = e["content"]
+                else:
+                    attempt["votes"][e["agent"]] = {
+                        "vote": e["verdict"],
+                        "reason": e["content"],
+                    }
+                continue
+
+        if kind == "phase_completed":
+            key = (e["round"], e["phase"])
+            if attempt is not None and attempt["key"] == key:
+                if e["phase"] == "critique":
+                    st["critiques"] = dict(attempt["critiques"])
+                elif e["phase"] == "vote":
+                    st["votes"] = dict(attempt["votes"])
+            fold(st, e)
+            pending_checkpoint = key
+            attempt = None
+            continue
+
+        if kind == "no_consensus":
+            if superseded is not None:
+                candidate, _candidate_key = superseded
+                checkpointed = copy.deepcopy(candidate)
+                st = copy.deepcopy(candidate)
+                _run_config(st, resume_config)
+                superseded = None
+            if pending_checkpoint is not None:
+                # no_consensus is emitted on the loop after the last phase's
+                # checkpoint, so reaching it proves that phase durable.
+                checkpointed = copy.deepcopy(st)
+                pending_checkpoint = None
+            fold(st, e)
+            continue
+
+        if kind == "human_decision":
+            # The decision command reads and validates the prior checkpoint
+            # before it can append this event.
+            checkpointed = copy.deepcopy(st)
+            pending_checkpoint = None
+
         fold(st, e)
     return st

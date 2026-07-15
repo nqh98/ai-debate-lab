@@ -130,8 +130,10 @@ def test_critiques_reset_at_each_critique_phase():
         ev("phase_started", round=1, phase="critique"),
         ev("critique", round=1, phase="critique", agent="a", content="c1"),
         ev("critique", round=1, phase="critique", agent="b", content="c2"),
+        ev("phase_completed", round=1, phase="critique"),
         ev("phase_started", round=2, phase="critique"),
         ev("critique", round=2, phase="critique", agent="a", content="c3"),
+        ev("phase_completed", round=2, phase="critique"),
     ])
     assert state["critiques"] == {"a": "c3"}
 
@@ -142,10 +144,23 @@ def test_a_halted_later_critique_keeps_the_prior_round_critiques():
         genesis(),
         ev("phase_started", round=1, phase="critique"),
         ev("critique", round=1, phase="critique", agent="a", content="c1"),
+        ev("phase_completed", round=1, phase="critique"),
         ev("phase_started", round=2, phase="critique"),
         ev("abstained", round=2, phase="critique", agent="b", content="boom"),
     ])
     assert state["critiques"] == {"a": "c1"}
+
+
+def test_a_completed_critique_replaces_prior_results_even_when_empty():
+    state = replay.replay([
+        genesis(),
+        ev("phase_started", round=1, phase="critique"),
+        ev("critique", round=1, phase="critique", agent="a", content="c1"),
+        ev("phase_completed", round=1, phase="critique"),
+        ev("phase_started", round=2, phase="critique"),
+        ev("phase_completed", round=2, phase="critique"),
+    ])
+    assert state["critiques"] == {}
 
 
 def test_votes_reset_at_each_vote_phase():
@@ -154,9 +169,11 @@ def test_votes_reset_at_each_vote_phase():
         ev("phase_started", round=1, phase="vote"),
         ev("vote", round=1, phase="vote", agent="a", verdict="accept",
            content="yes"),
+        ev("phase_completed", round=1, phase="vote"),
         ev("phase_started", round=2, phase="vote"),
         ev("vote", round=2, phase="vote", agent="b", verdict="reject",
            content="no"),
+        ev("phase_completed", round=2, phase="vote"),
     ])
     assert state["votes"] == {"b": {"vote": "reject", "reason": "no"}}
 
@@ -168,10 +185,45 @@ def test_a_halted_later_vote_keeps_the_prior_round_votes():
         ev("phase_started", round=1, phase="vote"),
         ev("vote", round=1, phase="vote", agent="a", verdict="accept",
            content="yes"),
+        ev("phase_completed", round=1, phase="vote"),
         ev("phase_started", round=2, phase="vote"),
         ev("abstained", round=2, phase="vote", agent="b", content="boom"),
     ])
     assert state["votes"] == {"a": {"vote": "accept", "reason": "yes"}}
+
+
+def test_a_completed_vote_replaces_prior_votes_even_when_empty():
+    state = replay.replay([
+        genesis(),
+        ev("phase_started", round=1, phase="vote"),
+        ev("vote", round=1, phase="vote", agent="a", verdict="accept",
+           content="yes"),
+        ev("phase_completed", round=1, phase="vote"),
+        ev("phase_started", round=2, phase="vote"),
+        ev("candidate", round=2, phase="vote", agent="b", content="answer"),
+        ev("abstained", round=2, phase="vote", agent="a",
+           content="not a vote"),
+        ev("phase_completed", round=2, phase="vote"),
+    ])
+    assert state["votes"] == {}
+    assert state["candidate"] == {"agent": "b", "text": "answer"}
+
+
+def test_a_resumed_same_phase_replaces_the_abandoned_attempt_results():
+    state = replay.replay([
+        genesis(),
+        ev("run_config", phase="run", roster=["a", "b"], max_rounds=2,
+           quorum="2/3"),
+        ev("phase_started", round=1, phase="critique"),
+        ev("critique", round=1, phase="critique", agent="a", content="old"),
+        ev("phase_completed", round=1, phase="critique"),
+        ev("run_config", phase="run", roster=["a", "b"], max_rounds=2,
+           quorum="2/3"),
+        ev("phase_started", round=1, phase="critique"),
+        ev("critique", round=1, phase="critique", agent="b", content="new"),
+        ev("phase_completed", round=1, phase="critique"),
+    ])
+    assert state["critiques"] == {"b": "new"}
 
 
 def test_abstained_resets_every_phase_not_every_round():

@@ -4,6 +4,8 @@ Tasks 1-3 can each pass while the two implementations still disagree. This
 file is what proves they don't, and it is the reason the deliberate
 duplication in replay.py is affordable. It is `debate fsck` run in process.
 """
+import pytest
+
 from debatelab import cli
 from debatelab.agents.base import AgentError, ErrorKind
 from debatelab.orchestrator import Orchestrator
@@ -177,6 +179,95 @@ def test_agrees_after_a_later_round_vote_halt(tmp_path):
         "b": {"vote": "reject", "reason": "VOTE: reject\nno"},
         "c": {"vote": "reject", "reason": "VOTE: reject\nno"},
     }
+    assert_agrees(store, did)
+
+
+def _crash_before_critique_checkpoint(store, did):
+    agents = [
+        MockAgent("a", ["prop a", "abandoned crit a"]),
+        MockAgent("b", ["prop b", "abandoned crit b"]),
+        MockAgent("c", ["prop c", "abandoned crit c"]),
+    ]
+    orch = Orchestrator(store, agents)
+    real_checkpoint = orch._checkpoint
+
+    def checkpoint(debate_id, state):
+        if state["last_completed_phase"] == "critique":
+            raise RuntimeError("crash before critique checkpoint")
+        real_checkpoint(debate_id, state)
+
+    orch._checkpoint = checkpoint
+    with pytest.raises(RuntimeError, match="before critique checkpoint"):
+        orch.run(did, max_rounds=1)
+
+
+def test_agrees_after_completed_phase_crash_then_resume_into_halt(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    _crash_before_critique_checkpoint(store, did)
+
+    Orchestrator(store, [
+        MockAgent("a", ["resumed crit a"]),
+        MockAgent("b", []),
+        MockAgent("c", []),
+    ]).run(did, max_rounds=1)
+
+    state = store.read_state(did)
+    assert state["last_completed_phase"] == "propose"
+    assert state["critiques"] == {}
+    assert state["status"] == "error"
+    assert_agrees(store, did)
+
+
+def test_agrees_when_same_phase_retry_has_changed_responders(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    _crash_before_critique_checkpoint(store, did)
+
+    agents = [
+        MockAgent("a", [
+            "replacement crit a", "rev a", "NOMINATE: b",
+            "VOTE: accept\nyes",
+        ]),
+        MockAgent("b", [
+            "replacement crit b", "rev b", "NOMINATE: a",
+            "VOTE: accept\nyes",
+        ]),
+        MockAgent("c", []),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+
+    state = store.read_state(did)
+    assert state["critiques"] == {
+        "a": "replacement crit a",
+        "b": "replacement crit b",
+    }
+    assert_agrees(store, did)
+
+
+def test_agrees_when_a_completed_vote_has_no_parseable_votes(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "crit a2", "rev a2", "NOMINATE: b", "invalid", "still invalid",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+            "crit b2", "rev b2", "NOMINATE: a", "invalid", "still invalid",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: a", "VOTE: reject\nno",
+            "crit c2", "rev c2", "NOMINATE: a", "invalid", "still invalid",
+        ]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=2)
+
+    state = store.read_state(did)
+    assert state["votes"] == {}
+    assert state["last_completed_phase"] == "vote"
+    assert state["status"] == "no_consensus"
     assert_agrees(store, did)
 
 
