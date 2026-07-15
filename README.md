@@ -40,6 +40,8 @@ debate new "Which caching strategy should we adopt?" --context notes.md
 debate run 20260714-which-caching-strategy   # streams phase progress
 debate show 20260714-which-caching-strategy  # read the summary
 debate approve 20260714-which-caching-strategy -m "agreed"
+debate result 20260714-which-caching-strategy        # prints final.md
+debate result 20260714-which-caching-strategy --json # prints result.json
 # or: debate reject <id> -m "reason"
 ```
 
@@ -47,6 +49,11 @@ debate approve 20260714-which-caching-strategy -m "agreed"
 vote happens within `--max-rounds` (default 5), the debate ends
 `no_consensus` with all dissents recorded — you still decide with
 approve/reject. `--max-rounds` must be at least 1.
+
+`run` exits `0` for consensus awaiting review, `1` for no consensus, and `3`
+for a halted error. `result` exits `0` for an approved answer and `1` when
+there is no answer. Under `set -e`, a legitimate no-consensus result aborts a
+script; use `|| true` when that outcome should not abort the script.
 
 Human decisions are recovered from the append-only `human_decision` transcript
 event. Repeating the same approve/reject command reconciles `state.json`,

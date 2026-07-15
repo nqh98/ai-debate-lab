@@ -117,6 +117,22 @@ def test_result_json_prints_parseable_answer(workdir, capsys):
     assert json.loads(capsys.readouterr().out)["answer"] == "ship postgres"
 
 
+def test_result_reads_a_pre_genesis_transcript_without_error(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    _record_consensus(store, debate_id)
+    transcript = store.path(debate_id) / "transcript.jsonl"
+    legacy_events = store.read_events(debate_id)[1:]
+    transcript.write_text(
+        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in legacy_events)
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["result", debate_id])
+
+    assert exc.value.code == 1
+    assert "# No answer" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     ("status", "exit_code"),
     [("awaiting_human", None), ("no_consensus", 1), ("error", 3)],
