@@ -212,8 +212,25 @@ def cmd_fsck(args):
     sys.exit(1)
 
 
+# `decision` is state.json's vocabulary ("approved"); `command` is the verb the
+# human typed ("approve"). The lock records the verb.
+_DECISION_COMMANDS = {"approved": "approve", "rejected": "reject"}
+
+
 def cmd_decide(args, decision):
     store = get_store()
+    try:
+        with store.debate_lock(
+            args.id, command=_DECISION_COMMANDS[decision], force=args.force
+        ):
+            _decide_locked(store, args, decision)
+    except LockError as e:
+        # main() does not catch LockError (cli.py:410-417); cmd_run catches it
+        # locally for the same reason.
+        sys.exit(str(e))
+
+
+def _decide_locked(store, args, decision):
     state = store.read_state(args.id)
     note = args.message or ""
     decision_events = [
@@ -386,11 +403,21 @@ def main(argv=None):
     sp = sub.add_parser("approve", help="approve the consensus answer")
     sp.add_argument("id")
     sp.add_argument("-m", "--message", default="")
+    sp.add_argument(
+        "--force",
+        action="store_true",
+        help="break an existing debate lock (use only if that process is dead)",
+    )
     sp.set_defaults(fn=lambda a: cmd_decide(a, "approved"))
 
     sp = sub.add_parser("reject", help="reject the consensus answer")
     sp.add_argument("id")
     sp.add_argument("-m", "--message", required=True)
+    sp.add_argument(
+        "--force",
+        action="store_true",
+        help="break an existing debate lock (use only if that process is dead)",
+    )
     sp.set_defaults(fn=lambda a: cmd_decide(a, "rejected"))
 
     sp = sub.add_parser("agents", help="list configured agents and readiness")

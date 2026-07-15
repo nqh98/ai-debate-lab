@@ -683,3 +683,55 @@ def test_fsck_on_a_missing_debate_fails_cleanly(workdir):
     with pytest.raises(SystemExit) as exc:
         cli.main(["fsck", "no-such-debate"])
     assert exc.value.code != 0
+
+
+def test_reject_refuses_while_a_run_holds_the_lock(workdir):
+    """The spec's headline race. A run marks itself 'running' in memory
+    (orchestrator.py:69) but does not checkpoint until its first phase ends
+    (orchestrator.py:149), so state.json still reads no_consensus for minutes
+    while the run is live. Without the lock the status gate lets the human
+    through and the run's first checkpoint then overwrites the decision,
+    leaving it in the transcript and not in the checkpoint."""
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("T", "problem")
+    state = store.read_state(debate_id)
+    state["status"] = "no_consensus"
+    store.write_state(debate_id, state)
+
+    with store.debate_lock(debate_id, command="run"):
+        before = len(store.read_events(debate_id))
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["reject", debate_id, "-m", "not convincing"])
+
+    assert "locked by pid" in str(exc.value)
+    assert "running `run`" in str(exc.value)
+    assert store.read_state(debate_id)["status"] == "no_consensus"
+    assert len(store.read_events(debate_id)) == before
+
+
+def test_approve_refuses_while_a_run_holds_the_lock(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    with store.debate_lock(debate_id, command="run"):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["approve", debate_id, "-m", "looks right"])
+    assert "locked by pid" in str(exc.value)
+    assert store.read_state(debate_id)["status"] == "awaiting_human"
+
+
+def test_approve_force_breaks_a_stale_lock(workdir, capsys):
+    """A refusal a human cannot override is a wedged debate."""
+    store, debate_id = _make_awaiting(workdir, capsys)
+    lock = workdir / "debates" / debate_id / "debate.lock"
+    lock.write_text(json.dumps({
+        "pid": 1, "host": "some-other-host",
+        "started_at": "2026-07-14T00:00:00+00:00", "run_id": "old",
+        "command": "run",
+    }))
+    cli.main(["approve", debate_id, "-m", "ok", "--force"])
+    assert store.read_state(debate_id)["status"] == "approved"
+
+
+def test_approve_releases_the_lock_when_it_finishes(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    cli.main(["approve", debate_id, "-m", "ok"])
+    assert not (workdir / "debates" / debate_id / "debate.lock").exists()
