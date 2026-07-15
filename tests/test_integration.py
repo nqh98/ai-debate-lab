@@ -3,12 +3,12 @@ import json
 
 import pytest
 
-from debatelab import cli
+from debatelab import cli, prompts
 from debatelab.agents import registry
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
-from .conftest import MockAgent
+from .conftest import MockAgent, happy_agent, make_store
 
 
 def scripted_agents():
@@ -236,3 +236,71 @@ def test_checkpoint_writes_all_derived_views_atomically(workdir):
     assert json.loads((debate_path / "result.json").read_text())["status"] == "awaiting_human"
     assert (debate_path / "final.md").read_text().startswith("# No answer")
     assert not list(debate_path.glob("*.tmp"))
+
+
+def test_the_answer_is_a_merge_and_carries_no_changelog(tmp_path, monkeypatch):
+    """The end-to-end shape of the cycle: the approved answer is the merged
+    document, not the winning agent's revision with its diff notes on top."""
+    monkeypatch.chdir(tmp_path)
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    a = MockAgent("a", [
+        "proposal from a",
+        "critique from a",
+        "Changes: tightened the intro\nrevised proposal from a",
+        "NOMINATE: a\nbest one",
+        "VOTE: accept\nagreed",
+    ], synthesis="the merged answer")
+    Orchestrator(store, [a, happy_agent("b"), happy_agent("c")]).run(
+        did, max_rounds=1
+    )
+    cli.main(["approve", did, "-m", "ship it"])
+
+    final = (store.root / did / "final.md").read_text()
+    assert "the merged answer" in final
+    assert "Changes:" not in final
+    assert "synthesized by **a**" in final
+
+    result = json.loads((store.root / did / "result.json").read_text())
+    assert result["answer"] == "the merged answer"
+    assert result["candidate"]["synthesized"] is True
+
+
+def test_a_resumed_debate_does_not_synthesize_twice(tmp_path):
+    """The phase split's whole justification: a halt after synthesize must
+    not re-run the DEEP call on resume."""
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    dead_vote = [
+        "proposal from {n}", "critique from {n}", "revised proposal from {n}",
+        "NOMINATE: a\nbest one",
+    ]
+
+    def stops_before_voting(name):
+        return MockAgent(name, [r.format(n=name) for r in dead_vote])
+
+    a = MockAgent("a", [r.format(n="a") for r in dead_vote])
+    Orchestrator(
+        store, [a, stops_before_voting("b"), stops_before_voting("c")]
+    ).run(did, max_rounds=1)
+    assert store.read_state(did)["status"] == "error"
+    assert store.read_state(did)["last_completed_phase"] == "synthesize"
+    first = [
+        e for e in store.read_events(did)
+        if e["type"] == "agent_call" and e["phase"] == "synthesize"
+    ]
+    assert len(first) == 1
+
+    a2 = MockAgent("a", ["VOTE: accept\nagreed"])
+    Orchestrator(store, [
+        a2,
+        MockAgent("b", ["VOTE: accept\nagreed"]),
+        MockAgent("c", ["VOTE: accept\nagreed"]),
+    ]).run(did)
+    after = [
+        e for e in store.read_events(did)
+        if e["type"] == "agent_call" and e["phase"] == "synthesize"
+    ]
+    assert len(after) == 1, "resume re-ran the synthesis"
+    assert not [p for p in a2.prompts if prompts.SYNTHESIS_HEADER in p]
+    assert store.read_state(did)["status"] == "awaiting_human"

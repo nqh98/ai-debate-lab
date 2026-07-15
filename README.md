@@ -1,9 +1,10 @@
 # AI Debate Lab
 
 Multiple AI agents (Claude, Codex, Antigravity, Grok, ...) analyze the same
-problem in a structured debate — propose, critique, revise, vote — until
-they unanimously agree on one answer. Nothing is final until a human
-approves it. Every artifact is a plain file you can read, diff, and commit.
+problem in a structured debate — propose, critique, revise, nominate,
+synthesize, vote — until they reach consensus on one answer. Nothing is
+final until a human approves it. Every artifact is a plain file you can
+read, diff, and commit.
 
 ## Setup
 
@@ -45,8 +46,8 @@ debate result 20260714-which-caching-strategy --json # prints result.json
 # or: debate reject <id> -m "reason"
 ```
 
-`run` resumes from the last completed phase if interrupted. If no unanimous
-vote happens within `--max-rounds` (default 5), the debate ends
+`run` resumes from the last completed phase if interrupted. If no consensus
+is reached within `--max-rounds` (default 5), the debate ends
 `no_consensus` with all dissents recorded — you still decide with
 approve/reject. `--max-rounds` must be at least 1.
 
@@ -80,13 +81,21 @@ debate serve --port 8080   # http://127.0.0.1:8080/
 
 ## Protocol
 
-Each round: **critique → revise → vote** (round 1 starts with **propose**).
-The vote phase nominates a candidate (plurality, config-order tie-break),
-then every agent accepts/rejects it. Unanimous accept = consensus →
-`awaiting_human`. Failed agent calls retry once, then abstain for the
-phase; a phase needs at least 2 responders. Agents that can't respond at
-all (missing API key, command not on PATH) are skipped at `debate run`
-startup with a warning — the debate proceeds with the remaining agents.
+Each round: **critique → revise → nominate → synthesize → vote** (round 1
+starts with **propose**). The nominate phase elects a candidate by plurality
+— an agent may not nominate itself, and ties break by a draw seeded from
+`<debate-id>:<round>`, so selection is unbiased yet reproducible from the
+transcript. The synthesize phase asks the winner to merge every proposal and
+critique into a single answer; if that call fails or comes back empty, the
+debate falls back to the winner's verbatim proposal and records
+`synthesis_failed`. Every agent then accepts or rejects the candidate. Zero
+rejects plus accepts ≥ `ceil(quorum × roster)` (default `2/3` of the roster
+the run started with) = consensus → `awaiting_human`. Failed agent calls
+retry with exponential backoff, then abstain for the phase; a phase needs at
+least 2 responders, except synthesize, which degrades instead of halting.
+Agents that can't respond at all (missing API key, command not on PATH) are
+skipped at `debate run` startup with a warning — the debate proceeds with
+the remaining agents.
 
 ## Tests
 
