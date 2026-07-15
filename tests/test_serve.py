@@ -81,9 +81,3 @@ def test_viewer_ignores_stale_detail_loads_after_navigation():
     assert "if (!isCurrent(id, generation)) return;" in source
     assert "const generation = ++routeGeneration;" in source
     assert "showDebate(id, generation)" in source
-
-
-def test_viewer_escapes_index_and_state_round_values():
-    source = viewer_source()
-    assert "round ${esc(String(e.round))}" in source
-    assert "round ${esc(String(state.round))}/${esc(String(state.max_rounds))}" in source

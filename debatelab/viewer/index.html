@@ -51,17 +51,27 @@
   <a href="#" id="back" hidden>&larr; all debates</a>
 </header>
 <main id="app"><p class="muted">loading…</p></main>
+<script id="render">
+/* Pure render layer: no DOM, no fetch, no page globals.
+   tests/test_viewer_render.py extracts this block and runs it under node. */
+const ESCAPES = {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"};
+
+function esc(s) {
+  /* Quotes are escaped because the markdown renderer emits href="..." — the
+     textContent/innerHTML trick this replaced escapes &, < and > only, which
+     is safe in text and unsafe in an attribute. NUL is stripped so agent text
+     cannot forge renderMarkdown's fenced-code placeholders. */
+  return String(s ?? "")
+    .replace(/\u0000/g, "")
+    .replace(/[&<>"']/g, c => ESCAPES[c]);
+}
+</script>
 <script>
 const app = document.getElementById("app");
 const back = document.getElementById("back");
 let pollTimer = null;
 let routeGeneration = 0;
 
-function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s ?? "";
-  return d.innerHTML;
-}
 async function fetchJSON(url) {
   const r = await fetch(url + "?t=" + Date.now());
   if (!r.ok) throw new Error(url + " -> " + r.status);
