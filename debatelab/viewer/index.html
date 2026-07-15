@@ -283,8 +283,9 @@ function renderHero(result) {
   if (!result) return "";
   if (result.answer !== null && result.answer !== undefined) {
     const c = result.candidate || {};
+    const credit = c.synthesized ? "synthesized by" : "from";
     let prov = `Approved ${esc(String(result.decided_at ?? ""))}` +
-      ` · from <strong>${esc(c.agent)}</strong>, round ${esc(String(c.round))}`;
+      ` · ${credit} <strong>${esc(c.agent)}</strong>, round ${esc(String(c.round))}`;
     if (result.tally) prov += ` · ${tallyText(result.tally)}`;
     return `<div class="card hero"><h2>Answer</h2>` +
       `<div class="md">${renderMarkdown(result.answer)}</div>` +
@@ -423,7 +424,8 @@ async function showDebate(id, generation) {
       <div class="md">${renderMarkdown(state.human_decision.note || "(no note)")}</div></div>`;
   }
   if (state.candidate) {
-    html += `<h2>Candidate answer (from ${esc(state.candidate.agent)})</h2>
+    const credit = state.candidate.synthesized ? "synthesized by" : "from";
+    html += `<h2>Candidate answer (${credit} ${esc(state.candidate.agent)})</h2>
       <div class="card md">${renderMarkdown(state.candidate.text)}</div>`;
   }
   const votes = Object.entries(state.votes || {});

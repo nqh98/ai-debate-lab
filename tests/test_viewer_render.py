@@ -552,6 +552,41 @@ def test_hero_escapes_a_hostile_reason():
 
 
 @needs_node
+def test_hero_credits_a_synthesized_answer():
+    out = render_js("""renderHero({
+      answer: "merged", decided_at: "2026-07-15",
+      candidate: {agent: "a", round: 2, synthesized: true},
+      tally: null, reason: null, round: 2, failed_phase: null
+    })""")
+    assert "synthesized by <strong>a</strong>" in out
+    assert "· from <strong>a</strong>" not in out
+
+
+@needs_node
+def test_hero_keeps_from_wording_for_a_verbatim_answer():
+    out = render_js("""renderHero({
+      answer: "verbatim", decided_at: "2026-07-15",
+      candidate: {agent: "a", round: 2, synthesized: false},
+      tally: null, reason: null, round: 2, failed_phase: null
+    })""")
+    assert "from <strong>a</strong>" in out
+    assert "synthesized" not in out
+
+
+@needs_node
+def test_hero_treats_a_missing_flag_as_not_synthesized():
+    """The four committed debates have no result.json; a legacy one written
+    before this cycle has a candidate with no flag."""
+    out = render_js("""renderHero({
+      answer: "old", decided_at: "2026-07-15",
+      candidate: {agent: "a", round: 1},
+      tally: null, reason: null, round: 1, failed_phase: null
+    })""")
+    assert "from <strong>a</strong>" in out
+    assert "synthesized" not in out
+
+
+@needs_node
 def test_transcript_renders_grouped_annotated_cards():
     events = js_events([
         {"round": 0, "phase": "run", "type": "run_config", "content": "..."},
