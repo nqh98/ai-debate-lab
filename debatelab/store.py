@@ -2,8 +2,13 @@
 state.json is the derived checkpoint, summary.md the human-readable view.
 """
 
+import contextlib
 import json
+import os
 import re
+import socket
+import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,6 +36,43 @@ def _atomic_write(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text)
     tmp.replace(path)
+
+
+class LockError(Exception):
+    """Another process holds this debate's run lock."""
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    return True
+
+
+def _read_lock(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _is_stale(holder: dict) -> bool:
+    """Only a live-PID check on THIS host can prove staleness.
+
+    Anything unknowable — a foreign host, a missing or half-written lock —
+    is treated as held. Erring toward a spurious refusal (resolvable with
+    --force) beats erring toward two concurrent runs shredding a transcript.
+    Inherits the usual PID-reuse race: a recycled PID reads as live.
+    """
+    if holder.get("host") != socket.gethostname():
+        return False
+    pid = holder.get("pid")
+    if not isinstance(pid, int):
+        return False
+    return not _pid_alive(pid)
 
 
 class DebateStore:
@@ -148,6 +190,56 @@ class DebateStore:
             )
         self.root.mkdir(exist_ok=True)
         _atomic_write(self.root / "index.json", json.dumps(entries, indent=2))
+
+    def _acquire_lock(self, path: Path, force: bool) -> int:
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            return os.open(path, flags)
+        except FileExistsError:
+            pass
+        holder = _read_lock(path)
+        if not force and not _is_stale(holder):
+            raise LockError(
+                f"debate is locked by pid {holder.get('pid')} on "
+                f"{holder.get('host')} since {holder.get('started_at')}; "
+                "use --force if that run is dead"
+            )
+        why = "forced" if force else "stale"
+        print(
+            f"breaking {why} lock from pid {holder.get('pid')}",
+            file=sys.stderr,
+        )
+        path.unlink(missing_ok=True)
+        try:
+            return os.open(path, flags)
+        except FileExistsError:
+            raise LockError("lock was re-acquired by another process; retry")
+
+    @contextlib.contextmanager
+    def run_lock(self, debate_id: str, force: bool = False):
+        """Hold debates/<id>/run.lock for the duration of a run.
+
+        The original design listed concurrent runs of one debate as a
+        non-goal but never enforced it: two `debate run` processes both
+        append to transcript.jsonl and race state.json.
+        """
+        d = self.path(debate_id)
+        if not (d / "state.json").exists():
+            raise FileNotFoundError(f"no such debate: {debate_id}")
+        path = d / "run.lock"
+        fd = self._acquire_lock(path, force)
+        info = {
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "started_at": _now(),
+            "run_id": uuid.uuid4().hex,
+        }
+        with os.fdopen(fd, "w") as f:
+            json.dump(info, f)
+        try:
+            yield info
+        finally:
+            path.unlink(missing_ok=True)
 
 
 def render_summary(state: dict) -> str:

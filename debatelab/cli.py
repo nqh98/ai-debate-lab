@@ -8,7 +8,7 @@ from importlib import resources
 from pathlib import Path
 
 from .agents import models, registry
-from .store import DebateStore, render_summary
+from .store import DebateStore, LockError, render_summary
 
 
 def positive_int(value: str) -> int:
@@ -48,26 +48,32 @@ def cmd_run(args):
     from .orchestrator import Orchestrator
 
     store = get_store()
-    specs = registry.load_agent_specs(args.config)
-    ready = []
-    for spec in specs:
-        if not spec.enabled:
-            continue
-        problem = registry.spec_problem(spec)
-        if problem:
-            print(f"skipping agent '{spec.name}': {problem}", flush=True)
-            continue
-        ready.append(spec)
-    agents = registry.build_agents(ready)
     try:
-        orch = Orchestrator(
-            store,
-            agents,
-            progress=lambda m: print(m, flush=True),
-        )
-    except ValueError as e:
+        with store.run_lock(args.id, force=args.force):
+            specs = registry.load_agent_specs(args.config)
+            ready = []
+            for spec in specs:
+                if not spec.enabled:
+                    continue
+                problem = registry.spec_problem(spec)
+                if problem:
+                    print(f"skipping agent '{spec.name}': {problem}", flush=True)
+                    continue
+                ready.append(spec)
+            agents = registry.build_agents(ready)
+            try:
+                orch = Orchestrator(
+                    store,
+                    agents,
+                    progress=lambda m: print(m, flush=True),
+                )
+            except ValueError as e:
+                sys.exit(str(e))
+            status = orch.run(
+                args.id, max_rounds=args.max_rounds, quorum=args.quorum
+            )
+    except LockError as e:
         sys.exit(str(e))
-    status = orch.run(args.id, max_rounds=args.max_rounds, quorum=args.quorum)
     print(f"final status: {status}")
     if status in ("awaiting_human", "no_consensus"):
         print(
@@ -239,6 +245,11 @@ def main(argv=None):
         help="fraction of the roster that must accept, e.g. 2/3 (default 2/3)",
     )
     sp.add_argument("--config", default="agents.yaml")
+    sp.add_argument(
+        "--force",
+        action="store_true",
+        help="break an existing run lock (use only if that run is dead)",
+    )
     sp.set_defaults(fn=cmd_run)
 
     sp = sub.add_parser("status", help="show a debate's status")
