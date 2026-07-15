@@ -3,6 +3,7 @@ state.json is the derived checkpoint, summary.md the human-readable view.
 """
 
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -73,6 +74,20 @@ def _is_stale(holder: dict) -> bool:
     if not isinstance(pid, int):
         return False
     return not _pid_alive(pid)
+
+
+@contextlib.contextmanager
+def _lock_transition(debate_path: Path):
+    """Serialize lock acquisition, takeover, and release for one debate."""
+    fd = os.open(debate_path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 class DebateStore:
@@ -191,29 +206,33 @@ class DebateStore:
         self.root.mkdir(exist_ok=True)
         _atomic_write(self.root / "index.json", json.dumps(entries, indent=2))
 
-    def _acquire_lock(self, path: Path, force: bool) -> int:
+    def _acquire_lock(self, path: Path, info: dict, force: bool) -> None:
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        try:
-            return os.open(path, flags)
-        except FileExistsError:
-            pass
-        holder = _read_lock(path)
-        if not force and not _is_stale(holder):
-            raise LockError(
-                f"debate is locked by pid {holder.get('pid')} on "
-                f"{holder.get('host')} since {holder.get('started_at')}; "
-                "use --force if that run is dead"
-            )
-        why = "forced" if force else "stale"
-        print(
-            f"breaking {why} lock from pid {holder.get('pid')}",
-            file=sys.stderr,
-        )
-        path.unlink(missing_ok=True)
-        try:
-            return os.open(path, flags)
-        except FileExistsError:
-            raise LockError("lock was re-acquired by another process; retry")
+        with _lock_transition(path.parent):
+            try:
+                fd = os.open(path, flags)
+            except FileExistsError:
+                holder = _read_lock(path)
+                if not force and not _is_stale(holder):
+                    raise LockError(
+                        f"debate is locked by pid {holder.get('pid')} on "
+                        f"{holder.get('host')} since {holder.get('started_at')}; "
+                        "use --force if that run is dead"
+                    )
+                why = "forced" if force else "stale"
+                print(
+                    f"breaking {why} lock from pid {holder.get('pid')}",
+                    file=sys.stderr,
+                )
+                path.unlink(missing_ok=True)
+                fd = os.open(path, flags)
+            with os.fdopen(fd, "w") as lock_file:
+                json.dump(info, lock_file)
+
+    def _release_lock(self, path: Path, run_id: str) -> None:
+        with _lock_transition(path.parent):
+            if _read_lock(path).get("run_id") == run_id:
+                path.unlink(missing_ok=True)
 
     @contextlib.contextmanager
     def run_lock(self, debate_id: str, force: bool = False):
@@ -227,19 +246,17 @@ class DebateStore:
         if not (d / "state.json").exists():
             raise FileNotFoundError(f"no such debate: {debate_id}")
         path = d / "run.lock"
-        fd = self._acquire_lock(path, force)
         info = {
             "pid": os.getpid(),
             "host": socket.gethostname(),
             "started_at": _now(),
             "run_id": uuid.uuid4().hex,
         }
-        with os.fdopen(fd, "w") as f:
-            json.dump(info, f)
+        self._acquire_lock(path, info, force)
         try:
             yield info
         finally:
-            path.unlink(missing_ok=True)
+            self._release_lock(path, info["run_id"])
 
 
 def render_summary(state: dict) -> str:

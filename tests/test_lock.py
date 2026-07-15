@@ -48,6 +48,25 @@ def test_run_lock_refuses_a_second_holder(tmp_path):
                 pass
 
 
+def test_original_holder_exit_does_not_release_forced_replacement(tmp_path):
+    store, did, lock = make(tmp_path)
+    original = store.run_lock(did)
+    replacement = store.run_lock(did, force=True)
+    original.__enter__()
+    replacement.__enter__()
+    replacement_info = json.loads(lock.read_text())
+
+    try:
+        original.__exit__(None, None, None)
+
+        assert json.loads(lock.read_text())["run_id"] == replacement_info["run_id"]
+        with pytest.raises(LockError, match="locked by pid"):
+            with store.run_lock(did):
+                pass
+    finally:
+        replacement.__exit__(None, None, None)
+
+
 def test_run_lock_breaks_a_stale_same_host_lock(tmp_path):
     store, did, lock = make(tmp_path)
     lock.write_text(json.dumps({
