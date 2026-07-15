@@ -209,3 +209,66 @@ def test_empty_and_nullish_render_empty():
     assert render_js("renderMarkdown(null)") == ""
     assert render_js('renderMarkdown("")') == ""
     assert render_js(r'renderMarkdown("   \n  ")') == ""
+
+
+@needs_node
+def test_bookkeeping_events_are_not_content():
+    """Regression: eventCard rendered every event as a card. A one-round
+    three-agent debate emits 43 events, 25 of them bookkeeping and 23 of
+    them carrying content:"" — so the viewer drew 23 empty <pre> blocks."""
+    for t in ("debate_created", "run_config", "roster_changed",
+              "phase_started", "phase_completed"):
+        assert render_js(f'classifyEvent("{t}")') == "structure"
+    assert render_js('classifyEvent("agent_call")') == "telemetry"
+
+
+@needs_node
+def test_debate_content_is_content():
+    for t in ("proposal", "critique", "revision", "nomination", "vote",
+              "abstained", "candidate", "consensus", "no_consensus", "error",
+              "human_decision", "fallback_candidate", "nomination_dropped",
+              "nomination_retry"):
+        assert render_js(f'classifyEvent("{t}")') == "content"
+
+
+@needs_node
+def test_unknown_event_types_default_to_content():
+    """The load-bearing half of the rule. Two cycles added event types the
+    viewer had no rule for and silently degraded it; a third must degrade to
+    a card, never to a blank page."""
+    assert render_js('classifyEvent("future_event_from_cycle_six")') == "content"
+    assert render_js("classifyEvent(undefined)") == "content"
+
+
+@needs_node
+def test_event_card_renders_content_as_markdown():
+    out = render_js(
+        r'eventCard({agent:"claude", type:"proposal", content:"# Plan\n- one"}, "")'
+    )
+    assert "<h3>Plan</h3>" in out
+    assert "<li>one</li>" in out
+    assert "claude" in out
+    assert "proposal" in out
+
+
+@needs_node
+def test_event_card_escapes_the_agent_name_and_type():
+    out = render_js(
+        r'eventCard({agent:"<script>x</script>", type:"proposal", content:"hi"}, "")'
+    )
+    assert "<script>" not in out
+
+
+@needs_node
+def test_event_card_shows_the_vote_verdict():
+    out = render_js(
+        r'eventCard({agent:"a", type:"vote", verdict:"accept", content:"ok"}, "")'
+    )
+    assert 'class="vote-accept"' in out
+    assert "accept" in out
+
+
+@needs_node
+def test_event_card_labels_a_system_event_as_system():
+    out = render_js(r'eventCard({agent:null, type:"consensus", content:"x"}, "")')
+    assert "system" in out

@@ -58,6 +58,7 @@
   .vote-accept { color:var(--ok); font-weight:600; }
   .vote-reject, .vote-abstained { color:var(--bad); font-weight:600; }
   .banner { border-left:4px solid var(--accent); }
+  .note { color:var(--muted); font-size:12px; }
 </style>
 </head>
 <body>
@@ -175,6 +176,32 @@ function renderMarkdown(text) {
   flushAll();
   return out.join("");
 }
+
+/* Structure events become the layout (§1): the phase delimiters group the
+   transcript, the header events render as a metadata line. */
+const HEADER_EVENTS = new Set(["debate_created", "run_config", "roster_changed"]);
+const PHASE_DELIMITERS = new Set(["phase_started", "phase_completed"]);
+const TELEMETRY_EVENTS = new Set(["agent_call"]);
+
+function classifyEvent(type) {
+  if (HEADER_EVENTS.has(type) || PHASE_DELIMITERS.has(type)) return "structure";
+  if (TELEMETRY_EVENTS.has(type)) return "telemetry";
+  /* Everything else is content, including types this viewer has never seen.
+     A new event type must degrade to a card, never blank the reading view. */
+  return "content";
+}
+
+function eventCard(ev, note) {
+  const verdict = ev.verdict
+    ? ` · <span class="vote-${esc(ev.verdict)}">${esc(ev.verdict)}</span>`
+    : "";
+  const timing = note ? ` <span class="note">${esc(note)}</span>` : "";
+  return `
+    <details class="card">
+      <summary>${esc(ev.agent ?? "system")} · ${esc(ev.type)}${verdict}${timing}</summary>
+      <div class="md">${renderMarkdown(ev.content)}</div>
+    </details>`;
+}
 </script>
 <script>
 const app = document.getElementById("app");
@@ -222,16 +249,6 @@ async function showList() {
         ${badge(e.status)}
       </span>
     </div>`).join("");
-}
-
-function eventCard(ev) {
-  const label = `${esc(ev.agent ?? "system")} · ${esc(ev.type)}` +
-    (ev.verdict ? ` · <span class="vote-${esc(ev.verdict)}">${esc(ev.verdict)}</span>` : "");
-  return `
-    <details class="card">
-      <summary>${label}</summary>
-      <pre>${esc(ev.content)}</pre>
-    </details>`;
 }
 
 function isCurrent(id, generation) {
