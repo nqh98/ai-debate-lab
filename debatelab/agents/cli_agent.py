@@ -2,7 +2,7 @@
 import subprocess
 
 from . import models
-from .base import Agent, AgentError
+from .base import Agent, AgentError, ErrorKind
 
 
 class CliAgent(Agent):
@@ -30,12 +30,19 @@ class CliAgent(Agent):
                 stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
-            raise AgentError(f"{self.name}: timed out after {self.timeout}s")
+            raise AgentError(
+                f"{self.name}: timed out after {self.timeout}s",
+                kind=ErrorKind.TIMEOUT,
+            )
         except FileNotFoundError:
-            raise AgentError(f"{self.name}: command not found: {cmd[0]}")
+            raise AgentError(
+                f"{self.name}: command not found: {cmd[0]}",
+                kind=ErrorKind.NOT_FOUND,
+            )
         if proc.returncode != 0:
             raise AgentError(
-                f"{self.name}: exit {proc.returncode}: {proc.stderr.strip()[:500]}"
+                f"{self.name}: exit {proc.returncode}: {proc.stderr.strip()[:500]}",
+                kind=ErrorKind.UNKNOWN,
             )
         return proc.stdout.strip()
 

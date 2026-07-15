@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from debatelab.agents.base import Agent, AgentError
+from debatelab.agents.base import Agent, AgentError, ErrorKind
 from debatelab.agents.cli_agent import CliAgent
 from debatelab.agents.models import DEEP, FAST
 
@@ -40,9 +40,15 @@ def test_cli_agent_nonzero_exit_raises(tmp_path):
         agent.ask("hello")
 
 
-def test_cli_agent_timeout_raises(tmp_path):
-    script = make_script(tmp_path, "sleep 5")
+def test_cli_agent_timeout_raises(tmp_path, monkeypatch):
+    script = make_script(tmp_path, "echo unused")
     agent = CliAgent("stub", [script, "{prompt}"], timeout=1)
+
+    def timeout(cmd, **kwargs):
+        assert kwargs["timeout"] == 1
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
     with pytest.raises(AgentError, match="timed out"):
         agent.ask("hello")
 
@@ -76,6 +82,46 @@ def test_cli_agent_missing_binary_raises():
     agent = CliAgent("stub", ["/no/such/binary", "{prompt}"])
     with pytest.raises(AgentError, match="not found"):
         agent.ask("hello")
+
+
+def test_nonzero_exit_is_unknown_and_retryable(tmp_path):
+    script = make_script(tmp_path, 'echo "boom" >&2; exit 3')
+    agent = CliAgent("stub", [script, "{prompt}"])
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.UNKNOWN
+    assert exc.value.retryable is True
+
+
+def test_timeout_is_classified_as_timeout_and_retryable(tmp_path, monkeypatch):
+    script = make_script(tmp_path, "echo unused")
+    agent = CliAgent("stub", [script, "{prompt}"], timeout=1)
+
+    def timeout(cmd, **kwargs):
+        assert kwargs["timeout"] == 1
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.TIMEOUT
+    assert exc.value.retryable is True
+
+
+def test_missing_binary_is_not_found_and_not_retryable():
+    agent = CliAgent("stub", ["/no/such/binary", "{prompt}"])
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.NOT_FOUND
+    assert exc.value.retryable is False
+
+
+def test_cli_errors_never_carry_a_retry_after(tmp_path):
+    script = make_script(tmp_path, "exit 1")
+    agent = CliAgent("stub", [script, "{prompt}"])
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.retry_after is None
 
 
 def make_models_script(tmp_path, lines):

@@ -5,7 +5,39 @@ import urllib.error
 import urllib.request
 
 from . import models
-from .base import Agent, AgentError
+from .base import Agent, AgentError, ErrorKind
+
+
+_STATUS_KINDS = {
+    429: ErrorKind.RATE_LIMIT,
+    401: ErrorKind.AUTH,
+    403: ErrorKind.AUTH,
+}
+
+
+def _kind_for_status(code: int) -> ErrorKind:
+    if code in _STATUS_KINDS:
+        return _STATUS_KINDS[code]
+    if 500 <= code < 600:
+        return ErrorKind.SERVER_ERROR
+    if 400 <= code < 500:
+        return ErrorKind.CLIENT_ERROR
+    return ErrorKind.UNKNOWN
+
+
+def _retry_after_seconds(headers) -> float | None:
+    if headers is None:
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        seconds = float(int(str(raw).strip()))
+    except (ValueError, OverflowError):
+        return None
+    if seconds < 0:
+        return None
+    return seconds
 
 
 def _openai_request(model, base_url, api_key, prompt):
@@ -102,7 +134,10 @@ class ApiAgent(Agent):
     def ask(self, prompt: str, task: str = models.DEEP) -> str:
         api_key = os.environ.get(self.api_key_env, "")
         if not api_key:
-            raise AgentError(f"{self.name}: env var {self.api_key_env} is not set")
+            raise AgentError(
+                f"{self.name}: env var {self.api_key_env} is not set",
+                kind=ErrorKind.AUTH,
+            )
         build, parse = DRIVERS[self.provider]
         url, headers, body = build(
             self._model_for(task, api_key), self.base_url, api_key, prompt
@@ -111,7 +146,10 @@ class ApiAgent(Agent):
         try:
             return parse(data).strip()
         except (KeyError, IndexError, TypeError, AttributeError) as e:
-            raise AgentError(f"{self.name}: unexpected response shape: {e!r}")
+            raise AgentError(
+                f"{self.name}: unexpected response shape: {e!r}",
+                kind=ErrorKind.BAD_RESPONSE,
+            )
 
     def _model_for(self, task: str, api_key: str) -> str:
         if self.model:
@@ -123,9 +161,15 @@ class ApiAgent(Agent):
             try:
                 available = list_parse(data)
             except (KeyError, TypeError, AttributeError) as e:
-                raise AgentError(f"{self.name}: unexpected model list shape: {e!r}")
+                raise AgentError(
+                    f"{self.name}: unexpected model list shape: {e!r}",
+                    kind=ErrorKind.BAD_RESPONSE,
+                )
             if not available:
-                raise AgentError(f"{self.name}: provider lists no models")
+                raise AgentError(
+                    f"{self.name}: provider lists no models",
+                    kind=ErrorKind.BAD_RESPONSE,
+                )
             self._available = available
         return models.choose_model(self._available, task) or self._available[0]
 
@@ -140,10 +184,20 @@ class ApiAgent(Agent):
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw_response = resp.read().decode()
         except urllib.error.HTTPError as e:
-            raise AgentError(f"{self.name}: HTTP {e.code}: {e.read().decode()[:500]}")
+            raise AgentError(
+                f"{self.name}: HTTP {e.code}: {e.read().decode()[:500]}",
+                kind=_kind_for_status(e.code),
+                retry_after=_retry_after_seconds(e.headers),
+            )
         except (urllib.error.URLError, TimeoutError) as e:
-            raise AgentError(f"{self.name}: request failed: {e}")
+            raise AgentError(
+                f"{self.name}: request failed: {e}",
+                kind=ErrorKind.TIMEOUT,
+            )
         try:
             return json.loads(raw_response)
         except json.JSONDecodeError as e:
-            raise AgentError(f"{self.name}: unexpected response shape: {e!r}")
+            raise AgentError(
+                f"{self.name}: unexpected response shape: {e!r}",
+                kind=ErrorKind.BAD_RESPONSE,
+            )

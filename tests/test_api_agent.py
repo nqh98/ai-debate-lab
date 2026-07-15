@@ -6,7 +6,7 @@ import pytest
 
 from debatelab.agents import models
 from debatelab.agents.api_agent import ApiAgent, DRIVERS, MODEL_LISTS
-from debatelab.agents.base import AgentError
+from debatelab.agents.base import AgentError, ErrorKind
 
 
 class Recorder(BaseHTTPRequestHandler):
@@ -15,6 +15,7 @@ class Recorder(BaseHTTPRequestHandler):
     raw_payload = None
     status = 200
     models_payload = {}
+    extra_headers = {}
 
     def do_POST(self):
         length = int(self.headers["Content-Length"])
@@ -31,6 +32,8 @@ class Recorder(BaseHTTPRequestHandler):
         self.send_response(Recorder.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        for key, value in Recorder.extra_headers.items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -44,11 +47,17 @@ def server():
     Recorder.raw_payload = None
     Recorder.status = 200
     Recorder.models_payload = {}
+    Recorder.extra_headers = {}
     srv = HTTPServer(("127.0.0.1", 0), Recorder)
-    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=lambda: srv.serve_forever(poll_interval=0.01),
+        daemon=True,
+    )
     thread.start()
     yield f"http://127.0.0.1:{srv.server_port}"
     srv.shutdown()
+    thread.join(timeout=1)
+    srv.server_close()
 
 
 def test_known_drivers():
@@ -182,3 +191,127 @@ def test_pinned_model_skips_discovery(server, monkeypatch):
     agent = ApiAgent("gpt", "openai", "pinned", "TEST_KEY", base_url=server)
     assert agent.ask("hello") == "ok"
     assert all(c["path"] != "/models" for c in Recorder.calls)
+
+
+def make_agent(server, monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "sk-test")
+    Recorder.payload = {"error": "nope"}
+    return ApiAgent("gpt", "openai", "gpt-5", "TEST_KEY", base_url=server)
+
+
+def test_rate_limit_is_classified_and_carries_retry_after(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.status = 429
+    Recorder.extra_headers = {"Retry-After": "5"}
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.RATE_LIMIT
+    assert exc.value.retryable is True
+    assert exc.value.retry_after == 5.0
+
+
+def test_rate_limit_without_a_retry_after_header(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.status = 429
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.RATE_LIMIT
+    assert exc.value.retry_after is None
+
+
+def test_http_date_retry_after_is_ignored_rather_than_parsed(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.status = 429
+    Recorder.extra_headers = {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.RATE_LIMIT
+    assert exc.value.retry_after is None
+
+
+def test_negative_retry_after_is_ignored(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.status = 429
+    Recorder.extra_headers = {"Retry-After": "-1"}
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.RATE_LIMIT
+    assert exc.value.retry_after is None
+
+
+def test_enormous_retry_after_is_ignored(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.status = 429
+    Recorder.extra_headers = {"Retry-After": "9" * 400}
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.RATE_LIMIT
+    assert exc.value.retry_after is None
+
+
+def test_server_errors_are_retryable(server, monkeypatch):
+    for status in (500, 502, 503, 504):
+        agent = make_agent(server, monkeypatch)
+        Recorder.status = status
+        with pytest.raises(AgentError) as exc:
+            agent.ask("hello")
+        assert exc.value.kind is ErrorKind.SERVER_ERROR, status
+        assert exc.value.retryable is True, status
+
+
+def test_auth_failures_are_not_retryable(server, monkeypatch):
+    for status in (401, 403):
+        agent = make_agent(server, monkeypatch)
+        Recorder.status = status
+        with pytest.raises(AgentError) as exc:
+            agent.ask("hello")
+        assert exc.value.kind is ErrorKind.AUTH, status
+        assert exc.value.retryable is False, status
+
+
+def test_other_client_errors_are_not_retryable(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.status = 400
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.CLIENT_ERROR
+    assert exc.value.retryable is False
+
+
+def test_unparseable_body_is_bad_response_and_not_retryable(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.raw_payload = b"this is not json"
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.BAD_RESPONSE
+    assert exc.value.retryable is False
+
+
+def test_unexpected_json_shape_is_bad_response(server, monkeypatch):
+    agent = make_agent(server, monkeypatch)
+    Recorder.payload = {"unexpected": "shape"}
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.BAD_RESPONSE
+    assert exc.value.retryable is False
+
+
+def test_missing_api_key_is_auth_and_not_retryable(monkeypatch):
+    monkeypatch.delenv("TEST_KEY", raising=False)
+    agent = ApiAgent("gpt", "openai", "gpt-5", "TEST_KEY")
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.AUTH
+    assert exc.value.retryable is False
+
+
+def test_unreachable_host_is_timeout_and_retryable(monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "sk-test")
+    agent = ApiAgent(
+        "gpt", "openai", "gpt-5", "TEST_KEY",
+        base_url="http://127.0.0.1:1",
+    )
+    with pytest.raises(AgentError) as exc:
+        agent.ask("hello")
+    assert exc.value.kind is ErrorKind.TIMEOUT
+    assert exc.value.retryable is True

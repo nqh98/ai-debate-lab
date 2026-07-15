@@ -1,7 +1,7 @@
 import pytest
 
 from debatelab.agents import models
-from debatelab.agents.base import AgentError
+from debatelab.agents.base import Agent, AgentError, ErrorKind
 from debatelab import prompts, protocol
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
@@ -21,6 +21,18 @@ def happy_agent(name, nominee="a"):
         f"NOMINATE: {nominee}\nbest one",
         "VOTE: accept\nagreed",
     ])
+
+
+class DeadAgent(Agent):
+    def __init__(self, name):
+        super().__init__(name)
+        self.calls = 0
+
+    def ask(self, prompt, task=models.DEEP):
+        self.calls += 1
+        raise AgentError(
+            f"{self.name}: command not found: agy", kind=ErrorKind.NOT_FOUND
+        )
 
 
 def test_requires_two_agents(tmp_path):
@@ -333,7 +345,9 @@ def test_agent_error_during_nomination_reask_does_not_halt(tmp_path):
     store = DebateStore(tmp_path / "debates")
     did = store.create("T", "problem")
     a = MockAgent("a", ["prop a", "crit a", "rev a", "not a nomination",
-                        AgentError("a: down"), "VOTE: accept"])
+                        AgentError("a: command not found: agy",
+                                   kind=ErrorKind.NOT_FOUND),
+                        "VOTE: accept"])
     b = MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
                         "VOTE: accept"])
 
@@ -432,3 +446,174 @@ def test_state_predating_roster_and_quorum_still_runs(tmp_path):
     assert state["quorum"] == "2/3"
     assert state["roster"] == ["a", "b"]
     assert not [e for e in store.read_events(did) if e["type"] == "roster_changed"]
+
+
+def test_a_transient_failure_is_retried_and_costs_no_vote(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        happy_agent("a"),
+        happy_agent("b"),
+        MockAgent("c", [
+            AgentError("c: HTTP 429: slow down", kind=ErrorKind.RATE_LIMIT),
+            "proposal from c",
+            "critique from c",
+            "revised proposal from c",
+            "NOMINATE: a\nbest one",
+            "VOTE: accept\nagreed",
+        ]),
+    ]
+    status = Orchestrator(store, agents).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert state["abstained"] == []
+    assert sorted(state["votes"]) == ["a", "b", "c"]
+    assert status == "awaiting_human"
+
+
+def test_a_permanent_failure_is_never_retried(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    dead = DeadAgent("c")
+    slept = []
+    Orchestrator(
+        store, [happy_agent("a"), happy_agent("b"), dead], sleep=slept.append
+    ).run(did, max_rounds=1)
+    assert dead.calls == 5
+    assert slept == []
+
+
+def test_a_permanent_failure_still_abstains(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [happy_agent("a"), happy_agent("b"), DeadAgent("c")]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert "c" in state["abstained"]
+    assert "c" not in state["votes"]
+
+
+def test_exhausted_retries_still_abstain(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [happy_agent("a"), happy_agent("b"), MockAgent("c", [])]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert "c" in state["abstained"]
+    assert state["roster"] == ["a", "b", "c"]
+
+
+def test_reask_retries_a_transient_failure_instead_of_abstaining(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b",
+            "I cannot accept this",
+            AgentError("a: HTTP 503", kind=ErrorKind.SERVER_ERROR),
+            "VOTE: reject\nnow parseable",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: accept",
+        ]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert state["votes"]["a"]["vote"] == "reject"
+    assert state["abstained"] == []
+
+
+def test_backoff_delays_are_drawn_from_the_injected_rng(tmp_path):
+    import random
+
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    slept = []
+    agents = [
+        happy_agent("a"),
+        happy_agent("b"),
+        MockAgent("c", [
+            AgentError("c: HTTP 503", kind=ErrorKind.SERVER_ERROR),
+            "proposal from c", "critique from c", "revised proposal from c",
+            "NOMINATE: a\nbest one", "VOTE: accept\nagreed",
+        ]),
+    ]
+    Orchestrator(
+        store, agents, sleep=slept.append, rng=random.Random(0)
+    ).run(did, max_rounds=1)
+    assert len(slept) == 1
+    assert slept == [random.Random(0).uniform(0, 1.0)]
+
+
+def test_every_attempt_is_recorded_with_its_outcome(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        happy_agent("a"),
+        happy_agent("b"),
+        MockAgent("c", [
+            AgentError("c: HTTP 429: slow down", kind=ErrorKind.RATE_LIMIT),
+            "proposal from c", "critique from c", "revised proposal from c",
+            "NOMINATE: a\nbest one", "VOTE: accept\nagreed",
+        ]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    calls = [
+        e for e in store.read_events(did)
+        if e["type"] == "agent_call" and e["agent"] == "c"
+        and e["phase"] == "propose"
+    ]
+    assert [e["attempt"] for e in calls] == [1, 2]
+    assert [e["ok"] for e in calls] == [False, True]
+    assert calls[0]["kind"] == "rate_limit"
+    assert "HTTP 429" in calls[0]["content"]
+    assert "kind" not in calls[1]
+
+
+def test_agent_call_events_carry_phase_task_and_duration(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=1
+    )
+    calls = [e for e in store.read_events(did) if e["type"] == "agent_call"]
+    assert calls, "expected an agent_call per attempt"
+    assert all(isinstance(e["duration_ms"], int) for e in calls)
+    assert all(e["duration_ms"] >= 0 for e in calls)
+    assert {e["phase"] for e in calls} == {
+        "propose", "critique", "revise", "vote"
+    }
+    assert {e["task"] for e in calls} == {models.DEEP, models.FAST}
+
+
+def test_agent_call_events_never_claim_a_token_count(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=1
+    )
+    calls = [e for e in store.read_events(did) if e["type"] == "agent_call"]
+    assert all("tokens" not in e for e in calls)
+
+
+def test_every_transcript_event_carries_the_base_schema(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=1
+    )
+    required = {"ts", "round", "phase", "agent", "type", "content"}
+    assert all(required <= set(e) for e in store.read_events(did))
+
+
+def test_a_permanent_failure_records_exactly_one_attempt(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [happy_agent("a"), happy_agent("b"), DeadAgent("c")]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    calls = [
+        e for e in store.read_events(did)
+        if e["type"] == "agent_call" and e["agent"] == "c"
+        and e["phase"] == "propose"
+    ]
+    assert [e["attempt"] for e in calls] == [1]
+    assert calls[0]["kind"] == "not_found"

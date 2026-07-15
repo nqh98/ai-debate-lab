@@ -191,3 +191,23 @@ def test_write_summary_and_rebuild_index_leave_no_tmp_behind(tmp_path):
     assert not (root / did / "summary.md.tmp").exists()
     assert not (root / did / "state.json.tmp").exists()
     assert (root / did / "summary.md").read_text() == "# hi"
+
+
+def test_concurrent_appends_never_interleave(tmp_path):
+    import concurrent.futures as cf
+
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+
+    def append(i):
+        store.append_event(did, {
+            "round": 1, "phase": "propose", "agent": f"agent-{i}",
+            "type": "agent_call", "content": "x" * 500,
+        })
+
+    with cf.ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(append, range(200)))
+
+    events = store.read_events(did)
+    assert len(events) == 200
+    assert all(e["content"] == "x" * 500 for e in events)

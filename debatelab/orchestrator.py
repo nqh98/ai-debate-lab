@@ -1,12 +1,16 @@
 """Runs a debate: fans out phase prompts to all agents, applies the protocol,
 checkpoints state after every phase so interrupted runs resume."""
 import concurrent.futures as cf
+import random
+import time
 from fractions import Fraction
 
-from . import prompts, protocol
+from . import prompts, protocol, retry
 from .agents import models
 from .agents.base import AgentError
 from .store import render_summary
+
+DEFAULT_SLEEP = time.sleep
 
 
 class DebateHalted(Exception):
@@ -14,13 +18,16 @@ class DebateHalted(Exception):
 
 
 class Orchestrator:
-    def __init__(self, store, agents, progress=lambda msg: None):
+    def __init__(self, store, agents, progress=lambda msg: None,
+                 sleep=None, rng=None):
         if len(agents) < 2:
             raise ValueError("a debate needs at least 2 agents")
         self.store = store
         self.agents = {a.name: a for a in agents}
         self.order = [a.name for a in agents]
         self.progress = progress
+        self.sleep = sleep or DEFAULT_SLEEP
+        self.rng = rng or random.Random()
 
     def run(self, debate_id: str, max_rounds: int | None = None,
             quorum: Fraction | None = None) -> str:
@@ -102,30 +109,59 @@ class Orchestrator:
             "type": "abstained", "content": content, "reason": reason,
         })
 
-    def _reask(self, name, prompt, parse, required, task):
+    def _record_call(self, debate_id, state, phase, name, task):
+        """Build the on_attempt hook that logs one agent_call per attempt."""
+        def on_attempt(attempt, duration_ms, error):
+            event = {
+                "round": state["round"], "phase": phase, "agent": name,
+                "type": "agent_call", "task": task, "attempt": attempt,
+                "duration_ms": duration_ms, "ok": error is None,
+                "content": "",
+            }
+            if error is not None:
+                event["kind"] = error.kind.value
+                event["content"] = str(error)
+            self.store.append_event(debate_id, event)
+
+        return on_attempt
+
+    def _reask(self, debate_id, state, phase, name, prompt, parse, required,
+               task):
         """Ask one agent again after an unparseable reply.
 
         Returns (value, text); (None, None) when the agent errors out.
         Re-asks run serially because they are rare, cheap FAST requests.
         """
         try:
-            text = self.agents[name].ask(prompts.reask(prompt, required), task)
+            text = retry.call_with_retry(
+                lambda: self.agents[name].ask(
+                    prompts.reask(prompt, required), task
+                ),
+                rng=self.rng,
+                sleep=self.sleep,
+                on_attempt=self._record_call(
+                    debate_id, state, phase, name, task
+                ),
+            )
         except AgentError:
             return None, None
         return parse(text), text
 
     def _fanout(self, debate_id, state, phase, prompt_for,
                 task=models.DEEP) -> dict:
-        """Ask every agent concurrently. One retry per agent; a second failure
-        records an abstention. Raises DebateHalted if fewer than 2 responded."""
+        """Ask every agent concurrently, retrying transient failures."""
         results = {}
 
         def call(name):
             prompt = prompt_for(name)
-            try:
-                return self.agents[name].ask(prompt, task)
-            except AgentError:
-                return self.agents[name].ask(prompt, task)
+            return retry.call_with_retry(
+                lambda: self.agents[name].ask(prompt, task),
+                rng=self.rng,
+                sleep=self.sleep,
+                on_attempt=self._record_call(
+                    debate_id, state, phase, name, task
+                ),
+            )
 
         with cf.ThreadPoolExecutor(max_workers=len(self.order)) as ex:
             futures = {ex.submit(call, name): name for name in self.order}
@@ -209,18 +245,21 @@ class Orchestrator:
             })
             nominee = prompts.parse_nomination(text, names)
             if nominee is None:
-                nominee, retry = self._reask(
+                nominee, retry_text = self._reask(
+                    debate_id,
+                    state,
+                    "vote",
                     name,
                     prompts.nominate_prompt(name, problem, proposals, names),
                     lambda t: prompts.parse_nomination(t, names),
                     prompts.NOMINATE_REQUIRED,
                     models.FAST,
                 )
-                if retry is not None:
-                    text = retry
+                if retry_text is not None:
+                    text = retry_text
                     self.store.append_event(debate_id, {
                         "round": state["round"], "phase": "vote", "agent": name,
-                        "type": "nomination_retry", "content": retry,
+                        "type": "nomination_retry", "content": retry_text,
                         "nominee": nominee,
                     })
             if nominee == name:
@@ -260,7 +299,10 @@ class Orchestrator:
         for name, text in vote_raw.items():
             verdict = prompts.parse_vote(text)
             if verdict is None:
-                verdict, retry = self._reask(
+                verdict, retry_text = self._reask(
+                    debate_id,
+                    state,
+                    "vote",
                     name,
                     prompts.vote_prompt(
                         name, problem, winner, proposals[winner]
@@ -269,8 +311,8 @@ class Orchestrator:
                     prompts.VOTE_REQUIRED,
                     models.FAST,
                 )
-                if retry is not None:
-                    text = retry
+                if retry_text is not None:
+                    text = retry_text
             if verdict is None:
                 self._abstain(
                     debate_id, state, "vote", name, text, "unparseable vote"

@@ -1,5 +1,13 @@
+import pytest
+
+from debatelab import orchestrator
 from debatelab.agents import models
 from debatelab.agents.base import Agent, AgentError
+
+
+@pytest.fixture(autouse=True)
+def no_real_sleep(monkeypatch):
+    monkeypatch.setattr(orchestrator, "DEFAULT_SLEEP", lambda _seconds: None)
 
 
 class MockAgent(Agent):
