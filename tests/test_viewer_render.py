@@ -615,3 +615,56 @@ def test_transcript_marks_a_halted_phase():
     ])
     out = render_js(f"renderTranscript({events})")
     assert "halted" in out
+
+
+LIVE = (
+    '{"updated": "2026-07-15T12:00:00+00:00", "round": 1,'
+    ' "phase": "propose", "calls": [{"agent": "claude", "task": "deep",'
+    ' "started": "2026-07-15T11:43:00+00:00", "elapsed_s": 1020,'
+    ' "stalled": true}]}'
+)
+NOW_FRESH = 'Date.parse("2026-07-15T12:00:30+00:00")'
+NOW_STALE = 'Date.parse("2026-07-15T12:05:00+00:00")'
+
+
+@needs_node
+def test_livestate_classifies():
+    assert render_js(
+        f"liveState(JSON.parse('{LIVE}'), {NOW_FRESH}, 120000)"
+    ) == "stalled"
+    assert render_js(
+        f"liveState(JSON.parse('{LIVE}'), {NOW_STALE}, 120000)"
+    ) == "stale"
+    assert render_js("liveState(null, 0, 120000)") == "none"
+    running = LIVE.replace('"stalled": true', '"stalled": false')
+    assert render_js(
+        f"liveState(JSON.parse('{running}'), {NOW_FRESH}, 120000)"
+    ) == "running"
+
+
+@needs_node
+def test_renderlive_badges_stalled_call():
+    out = render_js(f"renderLive(JSON.parse('{LIVE}'), {NOW_FRESH}, 120000)")
+    assert "claude" in out
+    assert "stalled 17m" in out
+    assert 'class="badge stalled"' in out
+
+
+@needs_node
+def test_renderlive_reports_dead_run_distinctly():
+    out = render_js(f"renderLive(JSON.parse('{LIVE}'), {NOW_STALE}, 120000)")
+    assert "run process not responding" in out
+    assert "stalled 17m" not in out
+
+
+@needs_node
+def test_renderlive_escapes_agent_names():
+    hostile = LIVE.replace("claude", "<img src=x>")
+    out = render_js(f"renderLive(JSON.parse('{hostile}'), {NOW_FRESH}, 120000)")
+    assert "<img" not in out
+    assert "&lt;img" in out
+
+
+@needs_node
+def test_renderlive_none_is_empty():
+    assert render_js("renderLive(null, 0, 120000)") == ""
