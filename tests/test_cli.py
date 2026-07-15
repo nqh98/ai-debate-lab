@@ -375,8 +375,9 @@ def test_run_forwards_force_to_store_lock(workdir, capsys, monkeypatch):
     calls = {}
 
     @contextmanager
-    def run_lock(debate_id, force=False):
+    def debate_lock(debate_id, *, command, force=False):
         calls["debate_id"] = debate_id
+        calls["command"] = command
         calls["force"] = force
         yield
 
@@ -388,8 +389,8 @@ def test_run_forwards_force_to_store_lock(workdir, capsys, monkeypatch):
             return "no_consensus"
 
     monkeypatch.setattr(cli, "get_store", lambda: store)
-    monkeypatch.setattr(DebateStore, "run_lock", lambda self, *args, **kwargs:
-                        run_lock(*args, **kwargs))
+    monkeypatch.setattr(DebateStore, "debate_lock", lambda self, *args, **kwargs:
+                        debate_lock(*args, **kwargs))
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
     monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
     from debatelab import orchestrator
@@ -399,7 +400,7 @@ def test_run_forwards_force_to_store_lock(workdir, capsys, monkeypatch):
         cli.main(["run", debate_id, "--force"])
 
     assert exc.value.code == 1
-    assert calls == {"debate_id": debate_id, "force": True}
+    assert calls == {"debate_id": debate_id, "command": "run", "force": True}
 
 
 def test_run_forwards_quorum_to_orchestrator(workdir, capsys, monkeypatch):

@@ -52,7 +52,7 @@ def cmd_run(args):
 
     store = get_store()
     try:
-        with store.run_lock(args.id, force=args.force):
+        with store.debate_lock(args.id, command="run", force=args.force):
             specs = registry.load_agent_specs(args.config)
             ready = []
             for spec in specs:
@@ -357,7 +357,7 @@ def main(argv=None):
     sp.add_argument(
         "--force",
         action="store_true",
-        help="break an existing run lock (use only if that run is dead)",
+        help="break an existing debate lock (use only if that process is dead)",
     )
     sp.set_defaults(fn=cmd_run)
 

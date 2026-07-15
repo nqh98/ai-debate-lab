@@ -273,8 +273,10 @@ class DebateStore:
                 if not force and not _is_stale(holder):
                     raise LockError(
                         f"debate is locked by pid {holder.get('pid')} on "
-                        f"{holder.get('host')} since {holder.get('started_at')}; "
-                        "use --force if that run is dead"
+                        f"{holder.get('host')} running "
+                        f"`{holder.get('command') or '?'}` since "
+                        f"{holder.get('started_at')}; "
+                        "use --force if that process is dead"
                     )
                 why = "forced" if force else "stale"
                 print(
@@ -292,22 +294,27 @@ class DebateStore:
                 path.unlink(missing_ok=True)
 
     @contextlib.contextmanager
-    def run_lock(self, debate_id: str, force: bool = False):
-        """Hold debates/<id>/run.lock for the duration of a run.
+    def debate_lock(self, debate_id: str, *, command: str, force: bool = False):
+        """Hold debates/<id>/debate.lock for the duration of a mutation.
 
-        The original design listed concurrent runs of one debate as a
-        non-goal but never enforced it: two `debate run` processes both
-        append to transcript.jsonl and race state.json.
+        The lock's subject is the debate, not the verb: run, approve, and
+        reject all write state.json, so they must exclude each other. The
+        status gate cannot do this job — state.json lags a live run by a
+        whole phase (orchestrator.py:69 sets "running" in memory,
+        orchestrator.py:149 first writes it).
+
+        `command` is recorded so a refusal can name what holds the lock.
         """
         d = self.path(debate_id)
         if not (d / "state.json").exists():
             raise FileNotFoundError(f"no such debate: {debate_id}")
-        path = d / "run.lock"
+        path = d / "debate.lock"
         info = {
             "pid": os.getpid(),
             "host": socket.gethostname(),
             "started_at": _now(),
             "run_id": uuid.uuid4().hex,
+            "command": command,
         }
         self._acquire_lock(path, info, force)
         try:
