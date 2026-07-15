@@ -1,7 +1,7 @@
 """Loads agents.yaml into specs and builds enabled Agent instances."""
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -26,7 +26,49 @@ class AgentSpec:
     model: str | None = None  # optional pin; omit to auto-select per task
     api_key_env: str | None = None
     base_url: str | None = None
-    timeout: int = 180
+    timeout: dict = field(
+        default_factory=lambda: {"fast": None, "deep": None}
+    )
+
+
+def _parse_task_seconds(raw, *, field_name, path, name,
+                        default_fast, default_deep):
+    """Normalize an int-or-{fast,deep} YAML value to a per-tier dict.
+
+    Absent -> the given defaults. A bare int applies to both tiers. A map
+    may set either tier to an int or null."""
+    if raw is None:
+        return {"fast": default_fast, "deep": default_deep}
+    if isinstance(raw, bool):
+        raise ConfigError(
+            f"{path}: agent '{name}': {field_name} must be a number or "
+            f"a {{fast, deep}} map"
+        )
+    if isinstance(raw, int):
+        return {"fast": raw, "deep": raw}
+    if isinstance(raw, dict):
+        unknown = set(raw) - {"fast", "deep"}
+        if unknown:
+            raise ConfigError(
+                f"{path}: agent '{name}': {field_name} has unknown "
+                f"key(s): {', '.join(sorted(unknown))}"
+            )
+        out = {}
+        for tier, default in (("fast", default_fast), ("deep", default_deep)):
+            value = raw.get(tier, default)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int)
+            ):
+                raise ConfigError(
+                    f"{path}: agent '{name}': {field_name}.{tier} must be "
+                    f"a number or null"
+                )
+            out[tier] = value
+        return out
+    raise ConfigError(
+        f"{path}: agent '{name}': {field_name} must be a number or "
+        f"a {{fast, deep}} map"
+    )
 
 
 def load_agent_specs(path) -> list[AgentSpec]:
@@ -57,7 +99,11 @@ def load_agent_specs(path) -> list[AgentSpec]:
                 model=entry.get("model"),
                 api_key_env=entry.get("api_key_env"),
                 base_url=entry.get("base_url"),
-                timeout=int(entry.get("timeout", 180)),
+                timeout=_parse_task_seconds(
+                    entry.get("timeout"), field_name="timeout",
+                    path=path, name=name,
+                    default_fast=None, default_deep=None,
+                ),
             )
         )
     return specs

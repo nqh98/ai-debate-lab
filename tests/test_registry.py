@@ -37,7 +37,7 @@ def test_load_good_config(tmp_path):
     assert [s.name for s in specs] == ["alpha", "beta"]
     assert specs[0].backend == "cli" and specs[0].enabled is True
     assert specs[1].enabled is False and specs[1].base_url == "https://api.x.ai/v1"
-    assert specs[0].timeout == 180
+    assert specs[0].timeout == {"fast": None, "deep": None}
 
 
 def test_load_rejects_missing_agents_key(tmp_path):

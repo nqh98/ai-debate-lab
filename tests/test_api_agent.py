@@ -324,10 +324,40 @@ def test_api_agent_reply_carries_the_pinned_model(monkeypatch):
     monkeypatch.setattr(
         ApiAgent,
         "_request",
-        lambda self, url, headers, body=None: {
+        lambda self, url, headers, body=None, *, timeout=None: {
             "choices": [{"message": {"content": "hi"}}]
         },
     )
     reply = agent.ask("prompt")
     assert reply.text == "hi"
     assert reply.model == "gpt-5"
+
+
+def test_ask_uses_per_task_timeout(monkeypatch):
+    """The deep ceiling reaches urlopen; None means block forever."""
+    seen = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return b'{"choices":[{"message":{"content":"hi"}}]}'
+
+    def fake_urlopen(req, timeout="MISSING"):
+        seen["timeout"] = timeout
+        return FakeResp()
+
+    monkeypatch.setenv("K", "secret")
+    monkeypatch.setattr(
+        "debatelab.agents.api_agent.urllib.request.urlopen", fake_urlopen
+    )
+    agent = ApiAgent(
+        "x", "openai", model="m", api_key_env="K",
+        timeout={"fast": 7, "deep": None},
+    )
+    agent.ask("p", task=models.DEEP)
+    assert seen["timeout"] is None
+    agent.ask("p", task=models.FAST)
+    assert seen["timeout"] == 7

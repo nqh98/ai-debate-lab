@@ -4,35 +4,46 @@ import subprocess
 from . import models
 from .base import Agent, AgentError, ErrorKind, Reply
 
+MODELS_DISCOVERY_TIMEOUT = 30
+
+
+def _normalize_timeout(timeout):
+    if timeout is None:
+        return {"fast": None, "deep": None}
+    if isinstance(timeout, int):
+        return {"fast": timeout, "deep": timeout}
+    return dict(timeout)
+
 
 class CliAgent(Agent):
     def __init__(
         self,
         name: str,
         command: list[str],
-        timeout: int = 180,
+        timeout: dict | int | None = None,
         models_command: list[str] | None = None,
     ):
         super().__init__(name)
         self.command = command
-        self.timeout = timeout
+        self.timeout = _normalize_timeout(timeout)
         self.models_command = models_command
         self._available: list[str] | None = None  # discovered lazily
 
     def ask(self, prompt: str, task: str = models.DEEP) -> Reply:
         model = self._model_for(task)
         cmd = self._build_command(prompt, model)
+        ceiling = self.timeout.get(task)
         try:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=ceiling,
                 stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
             raise AgentError(
-                f"{self.name}: timed out after {self.timeout}s",
+                f"{self.name}: timed out after {ceiling}s",
                 kind=ErrorKind.TIMEOUT,
             )
         except FileNotFoundError:
@@ -75,7 +86,7 @@ class CliAgent(Agent):
                 self.models_command,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=MODELS_DISCOVERY_TIMEOUT,
                 stdin=subprocess.DEVNULL,
             )
         except (OSError, subprocess.TimeoutExpired):
