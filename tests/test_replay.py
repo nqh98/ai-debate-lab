@@ -226,6 +226,32 @@ def test_a_resumed_same_phase_replaces_the_abandoned_attempt_results():
     assert state["critiques"] == {"b": "new"}
 
 
+def test_no_consensus_after_a_lower_cap_discards_an_unproven_checkpoint():
+    state = replay.replay([
+        genesis(),
+        ev("run_config", phase="run", roster=["a", "b"], max_rounds=2,
+           quorum="2/3"),
+        ev("phase_started", round=1, phase="critique"),
+        ev("critique", round=1, phase="critique", agent="a", content="kept"),
+        ev("phase_completed", round=1, phase="critique"),
+        ev("phase_started", round=1, phase="revise"),
+        ev("phase_completed", round=1, phase="revise"),
+        ev("phase_started", round=1, phase="vote"),
+        ev("phase_completed", round=1, phase="vote"),
+        ev("phase_started", round=2, phase="critique"),
+        ev("critique", round=2, phase="critique", agent="a",
+           content="abandoned"),
+        ev("phase_completed", round=2, phase="critique"),
+        ev("run_config", phase="run", roster=["a", "b"], max_rounds=1,
+           quorum="2/3"),
+        ev("no_consensus", round=1, phase="end"),
+    ])
+    assert state["round"] == 1
+    assert state["last_completed_phase"] == "vote"
+    assert state["critiques"] == {"a": "kept"}
+    assert state["status"] == "no_consensus"
+
+
 def test_abstained_resets_every_phase_not_every_round():
     state = replay.replay([
         genesis(),
@@ -257,6 +283,16 @@ def test_candidate_and_terminal_statuses():
     ])
     assert state["candidate"] == {"agent": "a", "text": "the answer"}
     assert state["status"] == "awaiting_human"
+
+
+def test_a_new_vote_attempt_clears_the_prior_candidate():
+    state = replay.replay([
+        genesis(),
+        ev("phase_started", round=1, phase="vote"),
+        ev("candidate", round=1, phase="vote", agent="a", content="old"),
+        ev("phase_started", round=1, phase="vote"),
+    ])
+    assert state["candidate"] is None
 
 
 def test_no_consensus_sets_its_status():

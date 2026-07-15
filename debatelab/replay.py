@@ -76,6 +76,8 @@ def _run_config(st, e):
 def _phase_started(st, e):
     st["round"] = e["round"]          # mirrors orchestrator.py:67
     st["abstained"] = []              # mirrors orchestrator.py:68
+    if e["phase"] == "vote":
+        st["candidate"] = None        # mirrors orchestrator.py:70
 
 
 def _phase_completed(st, e):
@@ -226,10 +228,9 @@ def replay(events):
 
         if kind == "no_consensus":
             if superseded is not None:
-                candidate, _candidate_key = superseded
-                checkpointed = copy.deepcopy(candidate)
-                st = copy.deepcopy(candidate)
-                _run_config(st, resume_config)
+                # A lower max_rounds can reach this event without starting a
+                # new phase, so it cannot prove the completed attempt reached
+                # its checkpoint.
                 superseded = None
             if pending_checkpoint is not None:
                 # no_consensus is emitted on the loop after the last phase's

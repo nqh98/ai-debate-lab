@@ -219,6 +219,73 @@ def test_agrees_after_completed_phase_crash_then_resume_into_halt(tmp_path):
     assert_agrees(store, did)
 
 
+def test_agrees_after_later_critique_crash_then_lower_round_cap(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "abandoned crit a",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+            "abandoned crit b",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: a", "VOTE: reject\nno",
+            "abandoned crit c",
+        ]),
+    ]
+    orch = Orchestrator(store, agents)
+    real_checkpoint = orch._checkpoint
+
+    def checkpoint(debate_id, state):
+        if state["round"] == 2 and state["last_completed_phase"] == "critique":
+            raise RuntimeError("crash before later critique checkpoint")
+        real_checkpoint(debate_id, state)
+
+    orch._checkpoint = checkpoint
+    with pytest.raises(RuntimeError, match="later critique checkpoint"):
+        orch.run(did, max_rounds=2)
+
+    Orchestrator(store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]).run(
+        did, max_rounds=1
+    )
+
+    state = store.read_state(did)
+    assert state["status"] == "no_consensus"
+    assert state["round"] == 1
+    assert state["last_completed_phase"] == "vote"
+    assert state["critiques"] == {
+        "a": "crit a", "b": "crit b", "c": "crit c",
+    }
+    assert_agrees(store, did)
+
+
+def test_agrees_when_resumed_vote_halts_before_selecting_a_candidate(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+        ]),
+        MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a"]),
+        MockAgent("c", ["prop c", "crit c", "rev c", "NOMINATE: a"]),
+    ]).run(did, max_rounds=1)
+    assert store.read_state(did)["candidate"] is not None
+
+    Orchestrator(store, [
+        MockAgent("a", ["NOMINATE: b"]),
+        MockAgent("b", []),
+        MockAgent("c", []),
+    ]).run(did, max_rounds=1)
+
+    state = store.read_state(did)
+    assert state["status"] == "error"
+    assert state["candidate"] is None
+    assert_agrees(store, did)
+
+
 def test_agrees_when_same_phase_retry_has_changed_responders(tmp_path):
     store = make_store(tmp_path)
     did = store.create("T", "problem")

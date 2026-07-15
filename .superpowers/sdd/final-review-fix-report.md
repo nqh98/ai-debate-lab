@@ -41,6 +41,49 @@ BANNED: []
 $ git diff --check
 (no output; exit 0)
 
+## Third Final Re-review Fixes
+
+- Replay now discards a superseded completed attempt when a resumed run emits
+  no_consensus before starting another phase. This preserves the restored
+  checkpoint and resumed run_config when a lower max_rounds cap ends the run
+  immediately, while retaining the existing pending-checkpoint handling for
+  continuous runs.
+- Orchestrator now clears candidate before every vote phase_started event, and
+  replay mirrors that transition. A halted later vote attempt therefore cannot
+  persist a candidate from an earlier attempt.
+- Added transcript-only coverage for the lower-cap superseded-checkpoint case
+  and vote-attempt candidate reset. Added differential regressions for a
+  later-round critique crash followed by a lower cap, and for a resumed vote
+  whose nomination fanout halts before selecting a candidate.
+
+### Third Re-review Verification
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_replay.py -q
+............................                                             [100%]
+28 passed in 0.03s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_replay_differential.py -q
+...............                                                          [100%]
+15 passed in 0.24s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_cli.py -q
+...............................                                          [100%]
+31 passed in 0.26s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest -q
+........................................................................ [ 27%]
+........................................................................ [ 54%]
+........................................................................ [ 81%]
+..................................................                       [100%]
+266 passed in 3.62s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -c "<replay import-purity AST check>"
+IMPORTS: ['copy']
+BANNED: []
+
+$ git diff --check
+(no output; exit 0)
+
 ## Second Final Re-review Fixes
 
 - Replay now creates a fresh result stage for every `phase_started` event.

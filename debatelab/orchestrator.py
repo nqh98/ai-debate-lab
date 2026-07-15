@@ -82,6 +82,8 @@ class Orchestrator:
                     break
                 state["round"] = rnd
                 state["abstained"] = []
+                if phase == "vote":
+                    state["candidate"] = None
                 self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
                 # Brackets the two assignments a reader must reproduce. Without
                 # phase_completed, a phase that raised DebateHalted is
