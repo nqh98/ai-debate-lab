@@ -102,6 +102,18 @@ class Orchestrator:
             "type": "abstained", "content": content, "reason": reason,
         })
 
+    def _reask(self, name, prompt, parse, required, task):
+        """Ask one agent again after an unparseable reply.
+
+        Returns (value, text); (None, None) when the agent errors out.
+        Re-asks run serially because they are rare, cheap FAST requests.
+        """
+        try:
+            text = self.agents[name].ask(prompts.reask(prompt, required), task)
+        except AgentError:
+            return None, None
+        return parse(text), text
+
     def _fanout(self, debate_id, state, phase, prompt_for,
                 task=models.DEEP) -> dict:
         """Ask every agent concurrently. One retry per agent; a second failure
@@ -196,6 +208,16 @@ class Orchestrator:
                 "type": "nomination", "content": text,
             })
             nominee = prompts.parse_nomination(text, names)
+            if nominee is None:
+                nominee, retry = self._reask(
+                    name,
+                    prompts.nominate_prompt(name, problem, proposals, names),
+                    lambda t: prompts.parse_nomination(t, names),
+                    prompts.NOMINATE_REQUIRED,
+                    models.FAST,
+                )
+                if retry is not None:
+                    text = retry
             if nominee == name:
                 self.store.append_event(debate_id, {
                     "round": state["round"], "phase": "vote", "agent": name,
@@ -232,6 +254,18 @@ class Orchestrator:
         votes = {}
         for name, text in vote_raw.items():
             verdict = prompts.parse_vote(text)
+            if verdict is None:
+                verdict, retry = self._reask(
+                    name,
+                    prompts.vote_prompt(
+                        name, problem, winner, proposals[winner]
+                    ),
+                    prompts.parse_vote,
+                    prompts.VOTE_REQUIRED,
+                    models.FAST,
+                )
+                if retry is not None:
+                    text = retry
             if verdict is None:
                 self._abstain(
                     debate_id, state, "vote", name, text, "unparseable vote"

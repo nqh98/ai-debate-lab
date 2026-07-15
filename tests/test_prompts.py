@@ -38,6 +38,17 @@ def test_vote_prompt_contains_candidate():
     assert "VOTE:" in p and "the answer" in p and "beta" in p
 
 
+def test_reask_resends_the_whole_prompt():
+    """CLI agents are stateless subprocesses with no session, so a re-ask
+    cannot just say 'try again' — it must resend the original prompt."""
+    original = prompts.vote_prompt("alpha", "Q", "beta", "the answer")
+    r = prompts.reask(original, prompts.VOTE_REQUIRED)
+    assert original in r
+    assert "could not be parsed" in r
+    assert "ONLY" in r
+    assert prompts.VOTE_REQUIRED in r
+
+
 def test_parse_nomination_reads_the_marker_line():
     names = ["alpha", "beta"]
     assert prompts.parse_nomination("NOMINATE: beta\nbecause...", names) == "beta"

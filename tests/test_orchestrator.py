@@ -192,6 +192,45 @@ def test_unparseable_vote_abstains_instead_of_counting_as_accept(tmp_path):
     assert state["abstained"] == ["a"]
 
 
+def test_unparseable_vote_is_reasked_once_and_then_counted(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    a = MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b",
+                        "I cannot accept this", "VOTE: reject"])
+    b = MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"])
+    Orchestrator(store, [a, b]).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert state["votes"]["a"]["vote"] == "reject"
+    assert state["abstained"] == []
+    assert "could not be parsed" in a.prompts[-1]
+    assert "Candidate final answer" in a.prompts[-1]
+
+
+def test_vote_unparseable_twice_abstains(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    a = MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b",
+                        "I cannot accept this", "still refusing to comply"])
+    b = MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"])
+    Orchestrator(store, [a, b]).run(did, max_rounds=1)
+    state = store.read_state(did)
+    assert "a" not in state["votes"]
+    assert state["abstained"] == ["a"]
+
+
+def test_agent_error_during_reask_abstains(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    a = MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b",
+                        "garbage", AgentError("a: down")])
+    b = MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+                        "VOTE: accept"])
+    Orchestrator(store, [a, b]).run(did, max_rounds=1)
+    assert store.read_state(did)["abstained"] == ["a"]
+
+
 def test_self_nomination_is_dropped_and_recorded(tmp_path):
     store = DebateStore(tmp_path / "debates")
     did = store.create("T", "problem")

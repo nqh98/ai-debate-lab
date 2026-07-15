@@ -3,6 +3,10 @@
 import re
 
 
+VOTE_REQUIRED = "'VOTE: accept' or 'VOTE: reject'"
+NOMINATE_REQUIRED = "'NOMINATE: <agent-name>'"
+
+
 def format_blocks(items: dict[str, str]) -> str:
     return "\n\n".join(f"### {name}\n{text}" for name, text in items.items())
 
@@ -112,3 +116,17 @@ def parse_vote(text: str) -> str | None:
         re.IGNORECASE | re.MULTILINE,
     )
     return match.group(1).lower() if match else None
+
+
+def reask(original_prompt: str, required: str) -> str:
+    """Re-ask an agent whose reply did not parse.
+
+    The full original prompt is resent because CLI agents are one-shot
+    subprocesses with no conversation state - there is nothing for a bare
+    "try again" to refer to.
+    """
+    return (
+        f"{original_prompt}\n\n"
+        "Your previous reply could not be parsed. "
+        f"Reply with ONLY the line {required}. No other text."
+    )
