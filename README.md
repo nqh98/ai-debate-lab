@@ -46,6 +46,12 @@ debate result 20260714-which-caching-strategy --json # prints result.json
 # or: debate reject <id> -m "reason"
 ```
 
+Add `--repo PATH` to ground the debate in a git repository: CLI-backed
+agents run inside a disposable checkout of its current HEAD
+(`debates/<id>/workspace/`, removed after approve/reject), where they can
+read the code and run verification commands before answering. API-backed
+agents still debate but cannot inspect the repo and are told so.
+
 `run` resumes from the last completed phase if interrupted. If no consensus
 is reached within `--max-rounds` (default 5), the debate ends
 `no_consensus` with all dissents recorded — you still decide with
@@ -56,6 +62,19 @@ for no consensus or any other non-awaiting, non-error status. `result` exits
 `0` for an approved answer and `1` when there is no answer. Under `set -e`, a
 legitimate no-consensus result aborts a script; use `|| true` when that outcome
 should not abort the script.
+
+## Timeouts and stalls
+
+Agent calls have **no timeout by default** — difficult problems may
+legitimately need hours. Set per-agent ceilings in `agents.yaml`
+(`timeout: 900` or `timeout: {fast: 180, deep: null}`) to opt in.
+While a run is in flight it prints a heartbeat line per busy agent every
+minute and rings the terminal bell once when a call exceeds its
+`stall_after` threshold (default: 15m deep, 5m fast) — a heads-up, not a
+cancellation. Ctrl-C interrupts safely: `debate run` resumes from the
+last completed phase. The viewer shows the same in-flight state from
+`debates/<id>/live.json` and reports a run process that stopped
+heartbeating.
 
 Human decisions are recovered from the append-only `human_decision` transcript
 event. Repeating the same approve/reject command reconciles `state.json`,
@@ -78,6 +97,8 @@ debate serve --port 8080   # http://127.0.0.1:8080/
 | `transcript.jsonl` | Append-only event log — source of truth |
 | `state.json` | Current derived state (resume checkpoint) |
 | `summary.md` | Human-readable summary, regenerated each round |
+| `workspace/` | Disposable git worktree of the debated repo (grounded debates only) |
+| `live.json` | Ephemeral in-flight run status for the viewer (deleted on run exit) |
 
 ## Protocol
 

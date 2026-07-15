@@ -7,6 +7,15 @@
 # provider's models endpoint (API backends); platforms that can't report
 # models use their own default routing. Add `model: <name>` to pin one.
 # API keys come from environment variables only.
+#
+# Repo-grounded debates (debate new --repo): per-agent extras.
+#   workspace_args: extra argv appended only when a workspace is attached —
+#     put each platform's sandbox flags here, e.g. for codex:
+#       workspace_args: ["--sandbox", "workspace-write"]
+#   timeout: opt-in ceiling in seconds; absent = no limit (calls may run
+#     for hours). Int or per-tier: {fast: 180, deep: null}
+#   stall_after: soft alert threshold (never cancels); default
+#     {fast: 300, deep: 900}
 agents:
   - name: claude
     backend: cli
