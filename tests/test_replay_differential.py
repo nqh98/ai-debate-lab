@@ -262,6 +262,118 @@ def test_agrees_after_later_critique_crash_then_lower_round_cap(tmp_path):
     assert_agrees(store, did)
 
 
+def test_agrees_after_later_critique_write_then_lower_round_cap(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "durable crit a",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+            "durable crit b",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: a", "VOTE: reject\nno",
+            "durable crit c",
+        ]),
+    ]
+    orch = Orchestrator(store, agents)
+    real_checkpoint = orch._checkpoint
+
+    def checkpoint(debate_id, state):
+        real_checkpoint(debate_id, state)
+        if state["round"] == 2 and state["last_completed_phase"] == "critique":
+            raise RuntimeError("interrupted after later critique write")
+
+    orch._checkpoint = checkpoint
+    with pytest.raises(RuntimeError, match="after later critique write"):
+        orch.run(did, max_rounds=2)
+
+    Orchestrator(store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]).run(
+        did, max_rounds=1
+    )
+
+    state = store.read_state(did)
+    assert state["status"] == "no_consensus"
+    assert state["round"] == 2
+    assert state["last_completed_phase"] == "critique"
+    assert state["critiques"] == {
+        "a": "durable crit a",
+        "b": "durable crit b",
+        "c": "durable crit c",
+    }
+    assert_agrees(store, did)
+
+
+def test_agrees_after_later_critique_halt_then_lower_round_cap(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "partial crit a",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: a", "VOTE: reject\nno",
+        ]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=2)
+    halted = store.read_state(did)
+    assert halted["status"] == "error"
+    assert halted["round"] == 2
+    assert halted["abstained"] == ["b", "c"]
+
+    Orchestrator(store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]).run(
+        did, max_rounds=1
+    )
+
+    state = store.read_state(did)
+    assert state["status"] == "no_consensus"
+    assert state["round"] == 2
+    assert state["last_completed_phase"] == "vote"
+    assert state["abstained"] == ["b", "c"]
+    assert_agrees(store, did)
+
+
+def test_agrees_after_halted_vote_candidate_then_lower_round_cap(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    agents = [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "crit a2", "rev a2", "NOMINATE: b", "VOTE: reject\nstill no",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+            "crit b2", "rev b2", "NOMINATE: a",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: a", "VOTE: reject\nno",
+            "crit c2", "rev c2", "NOMINATE: b",
+        ]),
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=2)
+    halted = store.read_state(did)
+    assert halted["status"] == "error"
+    assert halted["candidate"] == {"agent": "b", "text": "rev b2"}
+
+    Orchestrator(store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]).run(
+        did, max_rounds=1
+    )
+
+    state = store.read_state(did)
+    assert state["status"] == "no_consensus"
+    assert state["round"] == 2
+    assert state["last_completed_phase"] == "revise"
+    assert state["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert_agrees(store, did)
+
+
 def test_agrees_when_resumed_vote_halts_before_selecting_a_candidate(tmp_path):
     store = make_store(tmp_path)
     did = store.create("T", "problem")

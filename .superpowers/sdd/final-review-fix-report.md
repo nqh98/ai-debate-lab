@@ -133,3 +133,53 @@ STATE_KEYS: 14
 
 $ git diff --check
 (no output; exit 0)
+
+## Latest Final Re-review Fixes
+
+- `run_config` now records the loaded checkpoint's
+  `last_completed_phase` and pre-run `loaded_status`, in addition to its
+  existing `round`. These event-only identity fields do not change the
+  `state.json` shape.
+- Replay now compares an unresolved completed-phase or `DebateHalted`
+  checkpoint candidate with that loaded-state identity as soon as the next
+  `run_config` arrives. Matching candidates are promoted before applying the
+  new run configuration; non-matching candidates are discarded in favor of
+  the older durable checkpoint.
+- Legacy `run_config` events retain phase-based checkpoint resolution. When a
+  lower cap emits `no_consensus` without a new phase, replay uses the legacy
+  event's existing round to distinguish the candidate where possible.
+- Added differential regressions for interruption after the round-2 critique
+  checkpoint write returns from storage, a normal round-2 critique halt, and
+  a candidate selected during a halted round-2 vote. Each resumes with a
+  lower cap and no new phase attempt. The existing crash-before-write case
+  remains covered and discards its abandoned candidate.
+- Added transcript-level durable-versus-abandoned lower-cap coverage and
+  assertions for the new `run_config` identity fields.
+
+### Latest Re-review Verification
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_replay.py -q
+.............................                                            [100%]
+29 passed in 0.03s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_replay_differential.py -q
+..................                                                       [100%]
+18 passed in 0.46s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_cli.py -q
+...............................                                          [100%]
+31 passed in 0.37s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest -q
+........................................................................ [ 26%]
+........................................................................ [ 53%]
+........................................................................ [ 80%]
+......................................................                   [100%]
+270 passed in 3.72s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -c "<replay import-purity AST check>"
+IMPORTS: ['copy']
+BANNED: []
+
+$ git diff --check
+(no output; exit 0)

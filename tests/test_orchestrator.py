@@ -628,6 +628,8 @@ def test_run_emits_run_config_on_every_run(tmp_path):
     assert configs[0]["roster"] == ["a", "b"]
     assert configs[0]["max_rounds"] == 1
     assert configs[0]["quorum"] == "2/3"
+    assert configs[0]["last_completed_phase"] is None
+    assert configs[0]["loaded_status"] == "created"
 
 
 def test_run_config_records_the_effective_overrides(tmp_path):

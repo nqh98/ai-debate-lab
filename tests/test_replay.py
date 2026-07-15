@@ -242,13 +242,36 @@ def test_no_consensus_after_a_lower_cap_discards_an_unproven_checkpoint():
         ev("critique", round=2, phase="critique", agent="a",
            content="abandoned"),
         ev("phase_completed", round=2, phase="critique"),
-        ev("run_config", phase="run", roster=["a", "b"], max_rounds=1,
-           quorum="2/3"),
+        ev("run_config", round=1, phase="run", roster=["a", "b"],
+           max_rounds=1, quorum="2/3", last_completed_phase="vote",
+           loaded_status="running"),
         ev("no_consensus", round=1, phase="end"),
     ])
     assert state["round"] == 1
     assert state["last_completed_phase"] == "vote"
     assert state["critiques"] == {"a": "kept"}
+    assert state["status"] == "no_consensus"
+
+
+def test_no_consensus_after_a_lower_cap_preserves_a_loaded_checkpoint():
+    state = replay.replay([
+        genesis(),
+        ev("run_config", phase="run", roster=["a", "b"], max_rounds=2,
+           quorum="2/3"),
+        ev("phase_started", round=1, phase="vote"),
+        ev("phase_completed", round=1, phase="vote"),
+        ev("phase_started", round=2, phase="critique"),
+        ev("critique", round=2, phase="critique", agent="a",
+           content="durable"),
+        ev("phase_completed", round=2, phase="critique"),
+        ev("run_config", round=2, phase="run", roster=["a", "b"],
+           max_rounds=1, quorum="2/3", last_completed_phase="critique",
+           loaded_status="running"),
+        ev("no_consensus", round=2, phase="end"),
+    ])
+    assert state["round"] == 2
+    assert state["last_completed_phase"] == "critique"
+    assert state["critiques"] == {"a": "durable"}
     assert state["status"] == "no_consensus"
 
 

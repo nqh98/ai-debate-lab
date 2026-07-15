@@ -119,6 +119,17 @@ def _status_setter(value):
     return fold
 
 
+def _matches_loaded_state(st, event):
+    """Compare a checkpoint candidate with a new-format run_config."""
+    if "last_completed_phase" not in event or "loaded_status" not in event:
+        return None
+    return (
+        st["round"] == event["round"]
+        and st["last_completed_phase"] == event["last_completed_phase"]
+        and st["status"] == event["loaded_status"]
+    )
+
+
 _FOLD = {
     "debate_created": _debate_created,
     "run_config": _run_config,
@@ -166,13 +177,20 @@ def replay(events):
             raise UnknownEvent(f"no fold rule for event type {kind!r}")
 
         if kind == "run_config":
-            # A new run loaded state.json. Keep the just-completed working
-            # state long enough for its first phase to prove whether that
-            # completion reached the checkpoint, then restart from the last
-            # state already known to be durable.
+            # A new run loaded state.json. A new-format event identifies which
+            # unresolved boundary state it loaded; legacy events still need
+            # the first phase (or no_consensus round) to resolve that choice.
             if pending_checkpoint is not None:
                 superseded = (copy.deepcopy(st), pending_checkpoint)
             st = copy.deepcopy(checkpointed)
+            if superseded is not None:
+                candidate, _candidate_key = superseded
+                matches = _matches_loaded_state(candidate, e)
+                if matches is not None:
+                    if matches:
+                        checkpointed = copy.deepcopy(candidate)
+                        st = copy.deepcopy(candidate)
+                    superseded = None
             fold(st, e)
             resume_config = e
             pending_checkpoint = None
@@ -228,9 +246,14 @@ def replay(events):
 
         if kind == "no_consensus":
             if superseded is not None:
-                # A lower max_rounds can reach this event without starting a
-                # new phase, so it cannot prove the completed attempt reached
-                # its checkpoint.
+                candidate, _candidate_key = superseded
+                # Legacy run_config events have no complete identity. Their
+                # round is still enough to resolve the lower-cap cases where
+                # no phase starts to prove which checkpoint was loaded.
+                if candidate["round"] == resume_config["round"]:
+                    checkpointed = copy.deepcopy(candidate)
+                    st = copy.deepcopy(candidate)
+                    _run_config(st, resume_config)
                 superseded = None
             if pending_checkpoint is not None:
                 # no_consensus is emitted on the loop after the last phase's
@@ -238,6 +261,14 @@ def replay(events):
                 checkpointed = copy.deepcopy(st)
                 pending_checkpoint = None
             fold(st, e)
+            continue
+
+        if kind == "error":
+            # run() checkpoints a DebateHalted state after appending error.
+            # The next run_config identity proves whether that write landed.
+            fold(st, e)
+            pending_checkpoint = (e["round"], "error")
+            attempt = None
             continue
 
         if kind == "human_decision":

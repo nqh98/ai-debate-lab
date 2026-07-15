@@ -34,6 +34,7 @@ class Orchestrator:
         state = self.store.read_state(debate_id)
         if state["status"] in ("awaiting_human", "approved", "rejected"):
             return state["status"]
+        loaded_status = state["status"]
         if max_rounds is not None:
             state["max_rounds"] = max_rounds
         if quorum is not None:
@@ -63,6 +64,8 @@ class Orchestrator:
             "roster": list(self.order),
             "max_rounds": state["max_rounds"],
             "quorum": state["quorum"],
+            "last_completed_phase": state["last_completed_phase"],
+            "loaded_status": loaded_status,
         })
         problem = self.store.read_problem(debate_id)
         try:
