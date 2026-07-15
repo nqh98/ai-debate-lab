@@ -14,6 +14,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import protocol
+
+DEFAULT_MAX_ROUNDS = 5
+DEFAULT_QUORUM = str(protocol.DEFAULT_QUORUM)
+
 
 def slugify(title: str, max_len: int = 40) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:max_len].rstrip("-")
@@ -143,6 +148,16 @@ class DebateStore:
             parts += ["", f"## Context: {label}", "", text]
         (d / "problem.md").write_text("\n".join(parts) + "\n")
         (d / "transcript.jsonl").touch()
+        # The transcript's first line, before state.json exists: the identity
+        # and defaults are history, not merely inputs. Recorded rather than
+        # left to the reader to import, so changing DEFAULT_MAX_ROUNDS later
+        # cannot rewrite the history of debates created before the change.
+        self.append_event(debate_id, {
+            "round": 0, "phase": "create", "agent": None,
+            "type": "debate_created", "content": title,
+            "id": debate_id, "title": title,
+            "max_rounds": DEFAULT_MAX_ROUNDS, "quorum": DEFAULT_QUORUM,
+        })
         self.write_state(
             debate_id,
             {
@@ -150,8 +165,8 @@ class DebateStore:
                 "title": title,
                 "status": "created",
                 "round": 0,
-                "max_rounds": 5,
-                "quorum": "2/3",
+                "max_rounds": DEFAULT_MAX_ROUNDS,
+                "quorum": DEFAULT_QUORUM,
                 "roster": None,
                 "last_completed_phase": None,
                 "proposals": {},

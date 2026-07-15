@@ -29,6 +29,37 @@ def test_create_makes_files_and_id(tmp_path):
     assert state["human_decision"] is None
 
 
+def test_create_emits_debate_created_as_the_first_event(tmp_path):
+    """Regression: create() wrote state.json and touched an empty transcript,
+    so five of state.json's fourteen keys had no event backing at all and
+    replay(events) -> state could not be written."""
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("Pick a database", "which one?")
+    events = store.read_events(did)
+    assert events[0]["type"] == "debate_created"
+    assert events[0]["id"] == did
+    assert events[0]["title"] == "Pick a database"
+
+
+def test_debate_created_records_the_creation_defaults(tmp_path):
+    """The defaults are recorded, never imported by the reader: changing
+    DEFAULT_MAX_ROUNDS later must not rewrite this debate's history."""
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "p")
+    genesis = store.read_events(did)[0]
+    assert genesis["max_rounds"] == 5
+    assert genesis["quorum"] == "2/3"
+
+
+def test_debate_created_agrees_with_the_state_written_beside_it(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "p")
+    genesis = store.read_events(did)[0]
+    state = store.read_state(did)
+    for key in ("id", "title", "max_rounds", "quorum"):
+        assert genesis[key] == state[key], key
+
+
 def test_create_includes_context(tmp_path):
     store = DebateStore(tmp_path / "debates")
     did = store.create("T", "problem", [("notes.md", "some context")])
@@ -79,9 +110,9 @@ def test_events_roundtrip_with_ts(tmp_path):
         },
     )
     events = store.read_events(did)
-    assert len(events) == 1
-    assert events[0]["content"] == "hello"
-    assert "ts" in events[0]
+    assert len(events) == 2
+    assert events[1]["content"] == "hello"
+    assert "ts" in events[1]
 
 
 def test_state_roundtrip(tmp_path):
@@ -209,5 +240,5 @@ def test_concurrent_appends_never_interleave(tmp_path):
         list(ex.map(append, range(200)))
 
     events = store.read_events(did)
-    assert len(events) == 200
-    assert all(e["content"] == "x" * 500 for e in events)
+    assert len(events) == 201
+    assert all(e["content"] == "x" * 500 for e in events[1:])
