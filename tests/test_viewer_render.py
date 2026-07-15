@@ -272,3 +272,113 @@ def test_event_card_shows_the_vote_verdict():
 def test_event_card_labels_a_system_event_as_system():
     out = render_js(r'eventCard({agent:null, type:"consensus", content:"x"}, "")')
     assert "system" in out
+
+
+import json
+
+
+def js_events(events) -> str:
+    """Serialize a Python event list into a JS literal for the harness."""
+    return json.dumps(events)
+
+
+@needs_node
+def test_rounds_group_by_phase_in_the_order_the_phases_ran():
+    events = js_events([
+        {"round": 1, "phase": "propose", "type": "phase_started"},
+        {"round": 1, "phase": "propose", "type": "proposal",
+         "agent": "a", "content": "p"},
+        {"round": 1, "phase": "propose", "type": "phase_completed"},
+        {"round": 1, "phase": "critique", "type": "phase_started"},
+        {"round": 1, "phase": "critique", "type": "critique",
+         "agent": "a", "content": "c"},
+        {"round": 1, "phase": "critique", "type": "phase_completed"},
+    ])
+    out = render_js(
+        f"JSON.stringify(groupRounds({events}).map("
+        f"r => [r.round, r.phases.map(p => p.phase)]))"
+    )
+    assert json.loads(out) == [[1, ["propose", "critique"]]]
+
+
+@needs_node
+def test_header_events_do_not_create_a_round_zero():
+    """Regression: debate_created and run_config carry round 0, so the viewer
+    drew a 'Round 0' heading holding two bookkeeping cards."""
+    events = js_events([
+        {"round": 0, "phase": "create", "type": "debate_created",
+         "content": "T"},
+        {"round": 0, "phase": "run", "type": "run_config", "content": "..."},
+        {"round": 1, "phase": "propose", "type": "phase_started"},
+        {"round": 1, "phase": "propose", "type": "proposal",
+         "agent": "a", "content": "p"},
+    ])
+    out = render_js(f"JSON.stringify(groupRounds({events}).map(r => r.round))")
+    assert json.loads(out) == [1]
+
+
+@needs_node
+def test_only_content_events_land_in_a_phase():
+    events = js_events([
+        {"round": 1, "phase": "propose", "type": "phase_started"},
+        {"round": 1, "phase": "propose", "type": "agent_call",
+         "agent": "a", "duration_ms": 10, "ok": True, "content": ""},
+        {"round": 1, "phase": "propose", "type": "proposal",
+         "agent": "a", "content": "p"},
+        {"round": 1, "phase": "propose", "type": "phase_completed"},
+    ])
+    out = render_js(
+        f"JSON.stringify(groupRounds({events})[0].phases[0].events"
+        f".map(e => e.type))"
+    )
+    assert json.loads(out) == ["proposal"]
+
+
+@needs_node
+def test_a_phase_that_started_and_never_completed_is_halted():
+    """The boundary the replay cycle paid for: a completed phase used to be
+    indistinguishable from a halted one. 20260714-...-furt-2 is this shape —
+    propose raised DebateHalted and never completed."""
+    events = js_events([
+        {"round": 1, "phase": "propose", "type": "phase_started"},
+        {"round": 1, "phase": "propose", "type": "abstained",
+         "agent": "a", "content": "boom"},
+    ])
+    out = render_js(f"JSON.stringify(groupRounds({events})[0].phases[0])")
+    phase = json.loads(out)
+    assert phase["started"] is True
+    assert phase["completed"] is False
+    assert phase["halted"] is True
+
+
+@needs_node
+def test_a_completed_phase_is_not_halted():
+    events = js_events([
+        {"round": 1, "phase": "propose", "type": "phase_started"},
+        {"round": 1, "phase": "propose", "type": "proposal",
+         "agent": "a", "content": "p"},
+        {"round": 1, "phase": "propose", "type": "phase_completed"},
+    ])
+    out = render_js(f"JSON.stringify(groupRounds({events})[0].phases[0].halted)")
+    assert json.loads(out) is False
+
+
+@needs_node
+def test_legacy_transcripts_without_phase_delimiters_still_group():
+    """The four committed debates predate phase_started. First-seen order of
+    the phase field is the same answer for a debate that never resumed, so
+    the fallback is the same code path, not a second one."""
+    events = js_events([
+        {"round": 1, "phase": "propose", "type": "proposal",
+         "agent": "a", "content": "p"},
+        {"round": 1, "phase": "critique", "type": "critique",
+         "agent": "a", "content": "c"},
+        {"round": 2, "phase": "propose", "type": "proposal",
+         "agent": "a", "content": "p2"},
+    ])
+    out = render_js(
+        f"JSON.stringify(groupRounds({events}).map("
+        f"r => [r.round, r.phases.map(p => p.phase), r.phases[0].halted]))"
+    )
+    assert json.loads(out) == [[1, ["propose", "critique"], False],
+                              [2, ["propose"], False]]

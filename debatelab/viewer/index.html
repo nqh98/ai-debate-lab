@@ -202,6 +202,39 @@ function eventCard(ev, note) {
       <div class="md">${renderMarkdown(ev.content)}</div>
     </details>`;
 }
+function groupRounds(events) {
+  /* Rounds and phases in first-seen order. phase_started is appended before
+     its fanout runs, so first-seen order is the order the phases ran — and
+     legacy transcripts that have no phase_started fall into the same path,
+     because their first content event opens the group instead. */
+  const rounds = [];
+  const byRound = new Map();
+  for (const e of events || []) {
+    /* Header events carry round 0, and a "Round 0" heading is not a round. */
+    if (HEADER_EVENTS.has(e.type)) continue;
+    if (e.round === undefined || e.round === null) continue;
+
+    if (!byRound.has(e.round)) {
+      const r = {round: e.round, phases: [], byPhase: new Map()};
+      byRound.set(e.round, r);
+      rounds.push(r);
+    }
+    const r = byRound.get(e.round);
+    const name = e.phase ?? "";
+    if (!r.byPhase.has(name)) {
+      const p = {phase: name, started: false, completed: false,
+                 halted: false, events: []};
+      r.byPhase.set(name, p);
+      r.phases.push(p);
+    }
+    const p = r.byPhase.get(name);
+    if (e.type === "phase_started") { p.started = true; }
+    else if (e.type === "phase_completed") { p.completed = true; }
+    else if (classifyEvent(e.type) === "content") { p.events.push(e); }
+    p.halted = p.started && !p.completed;
+  }
+  return rounds;
+}
 </script>
 <script>
 const app = document.getElementById("app");
