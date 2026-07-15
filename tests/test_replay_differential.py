@@ -360,7 +360,9 @@ def test_agrees_after_halted_vote_candidate_then_lower_round_cap(tmp_path):
     Orchestrator(store, agents).run(did, max_rounds=2)
     halted = store.read_state(did)
     assert halted["status"] == "error"
-    assert halted["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert halted["candidate"] == {
+        "agent": "b", "text": "synthesis from b", "synthesized": True,
+    }
 
     Orchestrator(store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]).run(
         did, max_rounds=1
@@ -369,8 +371,10 @@ def test_agrees_after_halted_vote_candidate_then_lower_round_cap(tmp_path):
     state = store.read_state(did)
     assert state["status"] == "no_consensus"
     assert state["round"] == 2
-    assert state["last_completed_phase"] == "nominate"
-    assert state["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert state["last_completed_phase"] == "synthesize"
+    assert state["candidate"] == {
+        "agent": "b", "text": "synthesis from b", "synthesized": True,
+    }
     assert_agrees(store, did)
 
 
@@ -391,7 +395,9 @@ def _repeat_halted_vote(store, did, *, checkpoint_second):
     ]).run(did, max_rounds=2)
     first = store.read_state(did)
     assert first["status"] == "error"
-    assert first["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert first["candidate"] == {
+        "agent": "b", "text": "synthesis from b", "synthesized": True,
+    }
     assert first["abstained"] == ["b", "c"]
 
     orch = Orchestrator(store, [
@@ -423,7 +429,9 @@ def test_repeated_halt_discards_second_vote_attempt_if_checkpoint_crashes(tmp_pa
     state = _repeat_halted_vote(store, did, checkpoint_second=False)
 
     assert state["status"] == "no_consensus"
-    assert state["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert state["candidate"] == {
+        "agent": "b", "text": "synthesis from b", "synthesized": True,
+    }
     assert state["abstained"] == ["b", "c"]
     assert_agrees(store, did)
 
@@ -436,7 +444,9 @@ def test_repeated_halt_promotes_second_vote_attempt_if_checkpoint_is_durable(
     state = _repeat_halted_vote(store, did, checkpoint_second=True)
 
     assert state["status"] == "no_consensus"
-    assert state["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert state["candidate"] == {
+        "agent": "b", "text": "synthesis from b", "synthesized": True,
+    }
     assert state["abstained"] == ["a", "b"]
     assert_agrees(store, did)
 
@@ -529,4 +539,50 @@ def test_agrees_when_a_self_nomination_is_dropped(tmp_path):
     assert any(
         e["type"] == "nomination_dropped" for e in store.read_events(did)
     ), "expected a self-nomination to be dropped"
+    assert_agrees(store, did)
+
+
+def test_agrees_after_a_synthesised_debate(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(
+        store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]
+    ).run(did, max_rounds=1)
+    assert store.read_state(did)["candidate"]["synthesized"] is True
+    assert_agrees(store, did)
+
+
+def test_agrees_after_a_synthesis_fallback(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [
+        happy_agent("a", synthesis=AgentError("boom")),
+        happy_agent("b"),
+        happy_agent("c"),
+    ]).run(did, max_rounds=1)
+    assert store.read_state(did)["candidate"]["synthesized"] is False
+    assert_agrees(store, did)
+
+
+def test_agrees_across_a_carried_forward_synthesis(tmp_path):
+    """Two rounds: round 1's synthesis becomes a's proposal, which round 2
+    critiques and revises. The carry-forward is the state update most likely
+    to drift between the two implementations."""
+    def rejecting(name):
+        return MockAgent(name, [
+            f"proposal from {name}", f"critique from {name}",
+            f"revised proposal from {name}", "NOMINATE: a\nbest one",
+            "VOTE: reject\ntoo vague",
+            f"critique from {name}", f"revised proposal from {name}",
+            "NOMINATE: a\nbest one", "VOTE: accept\nfine now",
+        ])
+    a = MockAgent("a", [
+        "proposal from a", "critique from a", "revised proposal from a",
+        "NOMINATE: a\nbest one", "VOTE: accept\nagreed",
+        "critique from a", "revised proposal from a",
+        "NOMINATE: a\nbest one", "VOTE: accept\nagreed",
+    ])
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [a, rejecting("b"), rejecting("c")]).run(did, max_rounds=2)
     assert_agrees(store, did)

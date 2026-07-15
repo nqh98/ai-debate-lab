@@ -35,6 +35,7 @@ AUDIT_ONLY = frozenset({
     "nomination_dropped",
     "fallback_candidate",
     "roster_changed",
+    "synthesis_failed",
 })
 
 
@@ -99,7 +100,19 @@ def _critique(st, e):
 
 
 def _candidate(st, e):
-    st["candidate"] = {"agent": e["agent"], "text": e["content"]}
+    st["candidate"] = {
+        "agent": e["agent"], "text": e["content"], "synthesized": False,
+    }
+
+
+def _synthesis(st, e):
+    # Mirrors orchestrator._phase_synthesize: the merge is both the candidate
+    # and, from now on, the winner's proposal -- which is what round N+1
+    # critiques.
+    st["candidate"] = {
+        "agent": e["agent"], "text": e["content"], "synthesized": True,
+    }
+    st["proposals"][e["agent"]] = e["content"]
 
 
 def _vote(st, e):
@@ -150,6 +163,7 @@ _FOLD = {
     "revision": _proposal,
     "critique": _critique,
     "candidate": _candidate,
+    "synthesis": _synthesis,
     "vote": _vote,
     "abstained": _abstained,
     "consensus": _status_setter("awaiting_human"),

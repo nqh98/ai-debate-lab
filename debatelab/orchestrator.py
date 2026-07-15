@@ -214,6 +214,36 @@ class Orchestrator:
             return None, None
         return parse(text), text
 
+    @staticmethod
+    def _reject_reasons(state):
+        """Why the roster rejected the previous round's answer."""
+        return {
+            name: v["reason"]
+            for name, v in state.get("votes", {}).items()
+            if v["vote"] == "reject"
+        }
+
+    def _ask_one(self, debate_id, state, phase, name, prompt, task):
+        """Ask a single agent, with retry and telemetry. -> (text, error).
+
+        _fanout raises DebateHalted under 2 responders, a rule that is
+        meaningless for a one-agent call: it would halt every synthesis. The
+        synthesize phase degrades instead of halting, so the error comes back
+        as a value. See specs/2026-07-15-synthesis-phase-design.md §5.
+        """
+        try:
+            text = retry.call_with_retry(
+                lambda: self.agents[name].ask(prompt, task),
+                rng=self.rng,
+                sleep=self.sleep,
+                on_attempt=self._record_call(
+                    debate_id, state, phase, name, task
+                ),
+            )
+        except AgentError as e:
+            return None, str(e)
+        return text, None
+
     def _fanout(self, debate_id, state, phase, prompt_for,
                 task=models.DEEP) -> dict:
         """Ask every agent concurrently, retrying transient failures."""
@@ -260,11 +290,7 @@ class Orchestrator:
 
     def _phase_critique(self, debate_id, state, problem):
         proposals = state["proposals"]
-        reject_reasons = {
-            name: v["reason"]
-            for name, v in state.get("votes", {}).items()
-            if v["vote"] == "reject"
-        }
+        reject_reasons = self._reject_reasons(state)
 
         def prompt_for(name):
             others = {n: t for n, t in proposals.items() if n != name}
@@ -347,10 +373,52 @@ class Orchestrator:
                     "no valid nominations; candidate chosen by seeded draw"
                 ),
             })
-        state["candidate"] = {"agent": winner, "text": proposals[winner]}
+        state["candidate"] = {
+            "agent": winner, "text": proposals[winner], "synthesized": False,
+        }
         self.store.append_event(debate_id, {
             "round": state["round"], "phase": "nominate", "agent": winner,
             "type": "candidate", "content": proposals[winner],
+        })
+
+    def _phase_synthesize(self, debate_id, state, problem):
+        """The nomination winner merges the roster's work into one answer.
+
+        Cannot halt: a synthesis that does not arrive leaves the verbatim
+        candidate _phase_nominate already set, which is the protocol this
+        tool ran before synthesis existed. See spec §5.
+        """
+        winner = state["candidate"]["agent"]
+        text, error = self._ask_one(
+            debate_id, state, "synthesize", winner,
+            prompts.synthesize_prompt(
+                winner, problem, state["proposals"], state["critiques"],
+                self._reject_reasons(state) or None,
+            ),
+            models.DEEP,
+        )
+        if error is not None:
+            self._synthesis_failed(debate_id, state, winner, error, "agent_error")
+            return
+        if not text.strip():
+            # An unvalidatable reply has exactly two checks: it arrived, and
+            # it is not blank. Letting a blank one stand would put an empty
+            # answer in front of a human as a real one.
+            self._synthesis_failed(debate_id, state, winner, text, "empty")
+            return
+        state["candidate"] = {
+            "agent": winner, "text": text, "synthesized": True,
+        }
+        state["proposals"] = {**state["proposals"], winner: text}
+        self.store.append_event(debate_id, {
+            "round": state["round"], "phase": "synthesize", "agent": winner,
+            "type": "synthesis", "content": text,
+        })
+
+    def _synthesis_failed(self, debate_id, state, winner, content, reason):
+        self.store.append_event(debate_id, {
+            "round": state["round"], "phase": "synthesize", "agent": winner,
+            "type": "synthesis_failed", "content": content, "reason": reason,
         })
 
     def _phase_vote(self, debate_id, state, problem):

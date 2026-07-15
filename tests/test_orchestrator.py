@@ -38,11 +38,12 @@ def test_single_round_consensus(tmp_path):
     assert state["status"] == "awaiting_human"
     assert state["round"] == 1
     assert state["candidate"]["agent"] == "a"
-    assert state["candidate"]["text"] == "revised proposal from a"
+    assert state["candidate"]["text"] == "synthesis from a"
+    assert state["candidate"]["synthesized"] is True
     assert all(v["vote"] == "accept" for v in state["votes"].values())
     types = [e["type"] for e in store.read_events(did)]
     for expected in ("proposal", "critique", "revision", "nomination",
-                     "candidate", "vote", "consensus"):
+                     "candidate", "synthesis", "vote", "consensus"):
         assert expected in types
     assert "pending human decision" in store.read_summary(did)
 
@@ -53,8 +54,11 @@ def test_phases_request_matching_model_tiers(tmp_path):
     agents = [happy_agent("a"), happy_agent("b")]
     Orchestrator(store, agents).run(did)
     # propose/critique/revise are deep work; nominate and vote are fast.
+    # Only the nomination winner is asked to synthesize (deep); this test
+    # uses "a" as the nominee, so agents[0] picks up the extra deep call.
     assert agents[0].tasks == [
-        models.DEEP, models.DEEP, models.DEEP, models.FAST, models.FAST
+        models.DEEP, models.DEEP, models.DEEP, models.FAST, models.DEEP,
+        models.FAST,
     ]
 
 
@@ -138,7 +142,7 @@ def test_resume_after_interrupted_phase(tmp_path):
     assert sum(1 for e in events if e["type"] == "proposal") == 2
     state = store.read_state(did)
     assert state["round"] == 1
-    assert state["proposals"]["a"] == "rev a"
+    assert state["proposals"]["a"] == "synthesis from a"
 
 
 def test_finished_debate_is_not_rerun(tmp_path):
@@ -571,7 +575,7 @@ def test_agent_call_events_carry_phase_task_and_duration(tmp_path):
     assert all(isinstance(e["duration_ms"], int) for e in calls)
     assert all(e["duration_ms"] >= 0 for e in calls)
     assert {e["phase"] for e in calls} == {
-        "propose", "critique", "revise", "nominate", "vote"
+        "propose", "critique", "revise", "nominate", "synthesize", "vote"
     }
     assert {e["task"] for e in calls} == {models.DEEP, models.FAST}
 
@@ -655,7 +659,9 @@ def test_each_phase_is_bracketed_by_started_and_completed(tmp_path):
     Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
         did, max_rounds=1
     )
-    for phase in ("propose", "critique", "revise", "nominate", "vote"):
+    for phase in (
+        "propose", "critique", "revise", "nominate", "synthesize", "vote"
+    ):
         types = _types(store, did, phase)
         assert types[0] == "phase_started", phase
         assert "phase_completed" in types, phase
@@ -702,4 +708,155 @@ def test_nominate_and_vote_are_separately_bracketed(tmp_path):
     started = [
         e["phase"] for e in store.read_events(did) if e["type"] == "phase_started"
     ]
-    assert started == ["propose", "critique", "revise", "nominate", "vote"]
+    assert started == [
+        "propose", "critique", "revise", "nominate", "synthesize", "vote"
+    ]
+
+
+def _run_one_round(tmp_path, agents):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    return store, did
+
+
+def test_the_candidate_is_the_synthesis_not_a_proposal(tmp_path):
+    store, did = _run_one_round(tmp_path, [
+        happy_agent("a"), happy_agent("b"), happy_agent("c"),
+    ])
+    state = store.read_state(did)
+    assert state["candidate"] == {
+        "agent": "a", "text": "synthesis from a", "synthesized": True,
+    }
+    synth = [e for e in store.read_events(did) if e["type"] == "synthesis"]
+    assert len(synth) == 1
+    assert synth[0]["phase"] == "synthesize"
+    assert synth[0]["agent"] == "a"
+    assert synth[0]["content"] == "synthesis from a"
+
+
+def test_the_synthesis_carries_forward_as_the_winners_proposal(tmp_path):
+    store, did = _run_one_round(tmp_path, [
+        happy_agent("a"), happy_agent("b"), happy_agent("c"),
+    ])
+    state = store.read_state(did)
+    assert state["proposals"]["a"] == "synthesis from a"
+    assert state["proposals"]["b"] == "revised proposal from b"
+
+
+def test_only_the_winner_is_asked_to_synthesize(tmp_path):
+    agents = [happy_agent("a"), happy_agent("b"), happy_agent("c")]
+    _run_one_round(tmp_path, agents)
+    asked = {
+        ag.name: sum(1 for p in ag.prompts if prompts.SYNTHESIS_HEADER in p)
+        for ag in agents
+    }
+    assert asked == {"a": 1, "b": 0, "c": 0}
+
+
+def test_the_vote_is_cast_on_the_synthesis(tmp_path):
+    agents = [happy_agent("a"), happy_agent("b"), happy_agent("c")]
+    _run_one_round(tmp_path, agents)
+    vote_prompts = [
+        p for ag in agents for p in ag.prompts if "VOTE: accept" in p
+    ]
+    assert vote_prompts
+    for p in vote_prompts:
+        assert "synthesis from a" in p
+        assert "revised proposal from a" not in p
+
+
+def test_synthesis_error_falls_back_to_the_verbatim_proposal(tmp_path):
+    store, did = _run_one_round(tmp_path, [
+        happy_agent("a", synthesis=AgentError("boom")),
+        happy_agent("b"),
+        happy_agent("c"),
+    ])
+    state = store.read_state(did)
+    assert state["candidate"] == {
+        "agent": "a", "text": "revised proposal from a", "synthesized": False,
+    }
+    assert state["proposals"]["a"] == "revised proposal from a"
+    failed = [e for e in store.read_events(did) if e["type"] == "synthesis_failed"]
+    assert len(failed) == 1
+    assert failed[0]["reason"] == "agent_error"
+    assert failed[0]["agent"] == "a"
+    assert state["status"] == "awaiting_human", "the vote must still happen"
+
+
+def test_synthesis_empty_reply_falls_back(tmp_path):
+    store, did = _run_one_round(tmp_path, [
+        happy_agent("a", synthesis="   \n  "),
+        happy_agent("b"),
+        happy_agent("c"),
+    ])
+    state = store.read_state(did)
+    assert state["candidate"]["text"] == "revised proposal from a"
+    assert state["candidate"]["synthesized"] is False
+    failed = [e for e in store.read_events(did) if e["type"] == "synthesis_failed"]
+    assert [e["reason"] for e in failed] == ["empty"]
+
+
+def test_synthesis_failure_never_halts_the_debate(tmp_path):
+    store, did = _run_one_round(tmp_path, [
+        happy_agent("a", synthesis=AgentError("boom")),
+        happy_agent("b"),
+        happy_agent("c"),
+    ])
+    events = store.read_events(did)
+    assert not [e for e in events if e["type"] == "error"]
+    assert store.read_state(did)["status"] != "error"
+
+
+def test_a_pre_synthesis_checkpoint_resumes_into_nominate(tmp_path):
+    """spec §9: a state.json written before this cycle stops at revise. The
+    new protocol runs the superset nominate -> synthesize -> vote rather than
+    jumping straight to vote. No migration, no special case."""
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    state = store.read_state(did)
+    state.update({
+        "status": "running",
+        "round": 1,
+        "last_completed_phase": "revise",
+        "roster": ["a", "b", "c"],
+        "proposals": {"a": "a1", "b": "b1", "c": "c1"},
+        "critiques": {"a": "ca", "b": "cb", "c": "cc"},
+        "candidate": None,
+    })
+    store.write_state(did, state)
+    agents = [
+        MockAgent(n, ["NOMINATE: a\nbest one", "VOTE: accept\nagreed"])
+        for n in ("a", "b", "c")
+    ]
+    Orchestrator(store, agents).run(did, max_rounds=1)
+    started = [
+        e["phase"] for e in store.read_events(did) if e["type"] == "phase_started"
+    ]
+    assert started == ["nominate", "synthesize", "vote"]
+    assert store.read_state(did)["candidate"]["synthesized"] is True
+
+
+def test_synthesize_prompt_gets_reject_reasons_from_the_last_round(tmp_path):
+    """Round 2's synthesis must see why round 1's answer was rejected."""
+    def rejecting(name):
+        return MockAgent(name, [
+            f"proposal from {name}", f"critique from {name}",
+            f"revised proposal from {name}", "NOMINATE: a\nbest one",
+            "VOTE: reject\ntoo vague",
+            f"critique from {name}", f"revised proposal from {name}",
+            "NOMINATE: a\nbest one", "VOTE: accept\nfine now",
+        ])
+    a = MockAgent("a", [
+        "proposal from a", "critique from a", "revised proposal from a",
+        "NOMINATE: a\nbest one", "VOTE: accept\nagreed",
+        "critique from a", "revised proposal from a",
+        "NOMINATE: a\nbest one", "VOTE: accept\nagreed",
+    ])
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [a, rejecting("b"), rejecting("c")]).run(did, max_rounds=2)
+    synth_prompts = [p for p in a.prompts if prompts.SYNTHESIS_HEADER in p]
+    assert len(synth_prompts) == 2
+    assert "too vague" in synth_prompts[1]
+    assert "too vague" not in synth_prompts[0]

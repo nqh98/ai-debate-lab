@@ -216,7 +216,9 @@ def test_a_completed_vote_replaces_prior_votes_even_when_empty():
         ev("phase_completed", round=2, phase="vote"),
     ])
     assert state["votes"] == {}
-    assert state["candidate"] == {"agent": "b", "text": "answer"}
+    assert state["candidate"] == {
+        "agent": "b", "text": "answer", "synthesized": False,
+    }
 
 
 def test_a_resumed_same_phase_replaces_the_abandoned_attempt_results():
@@ -344,7 +346,9 @@ def test_candidate_and_terminal_statuses():
         ev("candidate", phase="nominate", agent="a", content="the answer"),
         ev("consensus", phase="vote", agent="a", content="the answer"),
     ])
-    assert state["candidate"] == {"agent": "a", "text": "the answer"}
+    assert state["candidate"] == {
+        "agent": "a", "text": "the answer", "synthesized": False,
+    }
     assert state["status"] == "awaiting_human"
 
 
@@ -432,5 +436,69 @@ def test_duplicate_events_last_write_wins():
 def test_an_unmodelled_event_type_raises():
     """The forcing function: the next person to add an event type must say
     whether it folds, rather than have replay drift silently out of sync."""
-    with pytest.raises(UnknownEvent, match="synthesis"):
-        replay.replay([genesis(), ev("synthesis", agent="a")])
+    with pytest.raises(UnknownEvent, match="not_a_real_event"):
+        replay.replay([genesis(), ev("not_a_real_event", agent="a")])
+
+
+def test_synthesis_folds_into_the_candidate_and_the_proposals():
+    state = replay.replay([
+        genesis(),
+        ev("phase_started", round=1, phase="nominate"),
+        ev("candidate", round=1, phase="nominate", agent="a",
+           content="a's proposal"),
+        ev("phase_completed", round=1, phase="nominate"),
+        ev("phase_started", round=1, phase="synthesize"),
+        ev("synthesis", round=1, phase="synthesize", agent="a",
+           content="merged"),
+        ev("phase_completed", round=1, phase="synthesize"),
+    ])
+    assert state["candidate"] == {
+        "agent": "a", "text": "merged", "synthesized": True,
+    }
+    assert state["proposals"]["a"] == "merged"
+
+
+def test_synthesis_failed_changes_no_state():
+    base = [
+        genesis(),
+        ev("phase_started", round=1, phase="nominate"),
+        ev("candidate", round=1, phase="nominate", agent="a",
+           content="a's proposal"),
+        ev("phase_completed", round=1, phase="nominate"),
+    ]
+    before = replay.replay(base)
+    after = replay.replay(base + [
+        ev("phase_started", round=1, phase="synthesize"),
+        ev("synthesis_failed", round=1, phase="synthesize", agent="a",
+           content="boom", reason="agent_error"),
+    ])
+    assert after["candidate"] == before["candidate"]
+    assert after["candidate"]["synthesized"] is False
+    assert after["proposals"] == before["proposals"]
+
+
+def test_the_candidate_event_is_never_marked_synthesized():
+    state = replay.replay([
+        genesis(),
+        ev("phase_started", round=1, phase="nominate"),
+        ev("candidate", round=1, phase="nominate", agent="a",
+           content="a's proposal"),
+    ])
+    assert state["candidate"]["synthesized"] is False
+
+
+def test_the_candidate_resets_on_nominate_not_vote():
+    """The reset moved with the phase split; a vote phase must not clear the
+    candidate it is voting on."""
+    base = [
+        genesis(),
+        ev("phase_started", round=1, phase="nominate"),
+        ev("candidate", round=1, phase="nominate", agent="a", content="x"),
+        ev("phase_completed", round=1, phase="nominate"),
+    ]
+    assert replay.replay(
+        base + [ev("phase_started", round=1, phase="vote")]
+    )["candidate"] is not None
+    assert replay.replay(
+        base + [ev("phase_started", round=2, phase="nominate")]
+    )["candidate"] is None

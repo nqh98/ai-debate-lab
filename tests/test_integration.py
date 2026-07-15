@@ -24,7 +24,7 @@ def scripted_agents():
         "use postgres with read replicas and pgbouncer",
         "NOMINATE: alpha\nstill best",
         "VOTE: accept\ngood",
-    ])
+    ], synthesis="use postgres with read replicas and pgbouncer")
     bravo = MockAgent("bravo", [
         "use mysql",
         "alpha is solid; charlie's is vague",
@@ -99,7 +99,7 @@ def test_no_consensus_candidate_can_be_approved_and_returned(workdir, capsys, mo
         MockAgent("alpha", [
             "use postgres", "critique", "use postgres with replicas",
             "NOMINATE: alpha", "VOTE: accept\\nyes",
-        ]),
+        ], synthesis="use postgres with replicas"),
         MockAgent("bravo", [
             "use mysql", "critique", "use mysql",
             "NOMINATE: alpha", "VOTE: reject\\nno",
@@ -130,7 +130,7 @@ def test_lower_cap_resume_keeps_checkpointed_candidate_for_approval(workdir, cap
         MockAgent("alpha", [
             "checkpointed answer", "critique", "checkpointed answer",
             "NOMINATE: alpha", "VOTE: accept",
-        ]),
+        ], synthesis="checkpointed answer"),
         MockAgent("bravo", [
             "other", "critique", "other",
             "NOMINATE: alpha", "VOTE: reject",
@@ -216,7 +216,9 @@ def test_reject_reasons_reach_round_two_prompts(workdir, capsys, monkeypatch):
     cli.main(["run", debate_id])
     capsys.readouterr()
     alpha = agents[0]
-    round2_critique_prompt = alpha.prompts[5]  # calls 0-4 are round 1
+    # Round 1 makes six calls: propose, critique, revise, nominate,
+    # synthesize (alpha wins), vote -- indices 0-5.
+    round2_critique_prompt = alpha.prompts[6]
     assert "Rejection reasons" in round2_critique_prompt
     assert "no connection pooling story" in round2_critique_prompt
 

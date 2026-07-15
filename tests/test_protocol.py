@@ -100,7 +100,8 @@ def test_tally_derives_abstains_from_the_roster():
 
 def test_next_phase_walks_nominate_before_vote():
     assert protocol.next_phase(1, "revise") == (1, "nominate")
-    assert protocol.next_phase(1, "nominate") == (1, "vote")
+    assert protocol.next_phase(1, "nominate") == (1, "synthesize")
+    assert protocol.next_phase(1, "synthesize") == (1, "vote")
 
 
 def test_next_phase_still_ends_the_round_on_vote():

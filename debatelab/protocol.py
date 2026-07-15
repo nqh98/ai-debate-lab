@@ -9,7 +9,7 @@ import random
 from collections import Counter
 from fractions import Fraction
 
-PHASES = ("propose", "critique", "revise", "nominate", "vote")
+PHASES = ("propose", "critique", "revise", "nominate", "synthesize", "vote")
 DEFAULT_QUORUM = Fraction(2, 3)
 
 
