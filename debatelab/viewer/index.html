@@ -235,6 +235,38 @@ function groupRounds(events) {
   }
   return rounds;
 }
+function pairTelemetry(events) {
+  /* Accumulate agent_call events per (round, phase, agent); flush into the
+     next content event with that key. Ordering, not the key alone: the vote
+     phase runs two fanouts under one phase name. Safe under _fanout's
+     concurrency because one agent's events are appended by one thread. */
+  const key = e => `${e.round}\u0000${e.phase}\u0000${e.agent}`;
+  const pending = new Map();
+  const calls = new Map();
+  (events || []).forEach((e, i) => {
+    const cls = classifyEvent(e.type);
+    if (cls === "telemetry") {
+      const k = key(e);
+      if (!pending.has(k)) pending.set(k, []);
+      pending.get(k).push(e);
+    } else if (cls === "content" && e.agent) {
+      const k = key(e);
+      if (pending.has(k)) { calls.set(i, pending.get(k)); pending.delete(k); }
+    }
+  });
+  /* Unflushed calls: a phase that halted before emitting content. */
+  return {calls, orphans: [...pending.values()]};
+}
+
+function telemetryNote(attempts) {
+  if (!attempts || !attempts.length) return "";
+  const ms = attempts.reduce((sum, a) => sum + (a.duration_ms || 0), 0);
+  const secs = (ms / 1000).toFixed(1) + "s";
+  if (attempts.length === 1) return secs;
+  const kinds = attempts.filter(a => a.kind).map(a => a.kind);
+  const kind = kinds.length ? " · " + kinds[kinds.length - 1] : "";
+  return `${attempts.length} attempts · ${secs}${kind}`;
+}
 </script>
 <script>
 const app = document.getElementById("app");

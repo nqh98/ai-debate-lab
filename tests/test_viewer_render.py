@@ -382,3 +382,103 @@ def test_legacy_transcripts_without_phase_delimiters_still_group():
     )
     assert json.loads(out) == [[1, ["propose", "critique"], False],
                               [2, ["propose"], False]]
+
+
+@needs_node
+def test_a_clean_call_annotates_its_content_card_with_a_duration():
+    events = js_events([
+        {"round": 1, "phase": "propose", "agent": "a", "type": "agent_call",
+         "attempt": 1, "duration_ms": 1400, "ok": True, "content": ""},
+        {"round": 1, "phase": "propose", "agent": "a", "type": "proposal",
+         "content": "p"},
+    ])
+    out = render_js(
+        f"telemetryNote(pairTelemetry({events}).calls.get(1))"
+    )
+    assert out == "1.4s"
+
+
+@needs_node
+def test_retries_annotate_with_attempt_count_and_error_kind():
+    """Why did this agent abstain — the question the reliability cycle
+    recorded kind for, finally readable in the viewer."""
+    events = js_events([
+        {"round": 1, "phase": "propose", "agent": "a", "type": "agent_call",
+         "attempt": 1, "duration_ms": 200, "ok": False, "kind": "rate_limit",
+         "content": "429"},
+        {"round": 1, "phase": "propose", "agent": "a", "type": "agent_call",
+         "attempt": 2, "duration_ms": 4000, "ok": True, "content": ""},
+        {"round": 1, "phase": "propose", "agent": "a", "type": "proposal",
+         "content": "p"},
+    ])
+    out = render_js(f"telemetryNote(pairTelemetry({events}).calls.get(2))")
+    assert out == "2 attempts · 4.2s · rate_limit"
+
+
+@needs_node
+def test_calls_pair_across_the_vote_phases_two_fanouts():
+    """Pairing cannot key on (round, phase, agent): the vote phase runs a
+    nominate fanout and a vote fanout under one phase name, so that key holds
+    two calls per agent. The rule is ordering-based instead."""
+    events = js_events([
+        {"round": 1, "phase": "vote", "agent": "a", "type": "agent_call",
+         "attempt": 1, "duration_ms": 1000, "ok": True, "content": ""},
+        {"round": 1, "phase": "vote", "agent": "a", "type": "nomination",
+         "content": "NOMINATE: b"},
+        {"round": 1, "phase": "vote", "agent": "a", "type": "agent_call",
+         "attempt": 1, "duration_ms": 2000, "ok": True, "content": ""},
+        {"round": 1, "phase": "vote", "agent": "a", "type": "vote",
+         "verdict": "accept", "content": "VOTE: accept"},
+    ])
+    out = render_js(
+        f"JSON.stringify([...pairTelemetry({events}).calls].map("
+        f"([i, a]) => [i, a.length, a[0].duration_ms]))"
+    )
+    assert json.loads(out) == [[1, 1, 1000], [3, 1, 2000]]
+
+
+@needs_node
+def test_interleaved_agents_pair_to_their_own_cards():
+    """_fanout runs agents concurrently, so calls from different agents
+    interleave. A given agent's own events stay ordered — that is all the
+    rule needs."""
+    events = js_events([
+        {"round": 1, "phase": "propose", "agent": "a", "type": "agent_call",
+         "attempt": 1, "duration_ms": 1000, "ok": True, "content": ""},
+        {"round": 1, "phase": "propose", "agent": "b", "type": "agent_call",
+         "attempt": 1, "duration_ms": 2000, "ok": True, "content": ""},
+        {"round": 1, "phase": "propose", "agent": "b", "type": "proposal",
+         "content": "pb"},
+        {"round": 1, "phase": "propose", "agent": "a", "type": "proposal",
+         "content": "pa"},
+    ])
+    out = render_js(
+        f"JSON.stringify([...pairTelemetry({events}).calls].map("
+        f"([i, a]) => [i, a[0].duration_ms]))"
+    )
+    assert sorted(json.loads(out)) == [[2, 2000], [3, 1000]]
+
+
+@needs_node
+def test_calls_with_no_content_event_are_orphans_not_dropped():
+    """When a phase halts, _fanout raises before the phase function emits any
+    content, so the agents that succeeded have calls with nothing to attach
+    to. Dropping them erases the evidence of the only phase that matters."""
+    events = js_events([
+        {"round": 1, "phase": "propose", "agent": "a", "type": "agent_call",
+         "attempt": 1, "duration_ms": 1000, "ok": True, "content": ""},
+        {"round": 1, "phase": "propose", "agent": "b", "type": "agent_call",
+         "attempt": 1, "duration_ms": 900, "ok": False, "kind": "timeout",
+         "content": "timed out"},
+    ])
+    out = render_js(
+        f"JSON.stringify(pairTelemetry({events}).orphans.map("
+        f"a => [a[0].agent, a.length]))"
+    )
+    assert sorted(json.loads(out)) == [["a", 1], ["b", 1]]
+
+
+@needs_node
+def test_telemetry_note_of_nothing_is_empty():
+    assert render_js("telemetryNote([])") == ""
+    assert render_js("telemetryNote(undefined)") == ""
