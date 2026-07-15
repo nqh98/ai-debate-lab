@@ -41,12 +41,14 @@ def test_vote_prompt_contains_candidate():
 def test_parse_nomination_reads_the_marker_line():
     names = ["alpha", "beta"]
     assert prompts.parse_nomination("NOMINATE: beta\nbecause...", names) == "beta"
+    assert prompts.parse_nomination('NOMINATE: "beta"\nbecause...', names) == "beta"
     assert prompts.parse_nomination("nominate:   alpha", names) == "alpha"
 
 
 def test_parse_nomination_never_guesses_from_prose():
     names = ["alpha", "beta"]
     assert prompts.parse_nomination("I think beta's plan is weakest", names) is None
+    assert prompts.parse_nomination("NOMINATE: beta's", names) is None
     assert prompts.parse_nomination("no idea", names) is None
     assert prompts.parse_nomination("NOMINATE: gamma", names) is None
 
@@ -61,6 +63,7 @@ def test_parse_vote_reads_the_marker_line():
 
 
 def test_parse_vote_never_infers_a_verdict_from_prose():
+    assert prompts.parse_vote("VOTE: accepted") is None
     assert prompts.parse_vote("I cannot accept this") is None
     assert prompts.parse_vote("I do not accept") is None
     assert prompts.parse_vote("I accept this fine answer") is None

@@ -91,13 +91,24 @@ def vote_prompt(
 
 def parse_nomination(text: str, valid_names: list[str]) -> str | None:
     """Return a valid agent named by a NOMINATE marker, or None."""
-    match = re.search(r'NOMINATE:\s*"?([\w.-]+)', text, re.IGNORECASE)
-    if match and match.group(1) in valid_names:
-        return match.group(1)
+    match = re.search(
+        r'^[ \t]*NOMINATE:[ \t]*(?:"([\w.-]+)"|([\w.-]+))'
+        r'(?=[ \t]*(?:\r?$|\r?\n))',
+        text,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    nominee = match.group(1) or match.group(2) if match else None
+    if nominee in valid_names:
+        return nominee
     return None
 
 
 def parse_vote(text: str) -> str | None:
     """Return the marked verdict, or None when no VOTE marker is present."""
-    match = re.search(r"VOTE:\s*(accept|reject)", text, re.IGNORECASE)
+    match = re.search(
+        r"^[ \t]*VOTE:[ \t]*(accept|reject)"
+        r"(?=[ \t]*(?:\r?$|\r?\n))",
+        text,
+        re.IGNORECASE | re.MULTILINE,
+    )
     return match.group(1).lower() if match else None
