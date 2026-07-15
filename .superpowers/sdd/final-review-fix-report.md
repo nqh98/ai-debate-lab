@@ -183,3 +183,51 @@ BANNED: []
 
 $ git diff --check
 (no output; exit 0)
+
+## Loaded-State Identity Final Re-review Fix
+
+- Orchestrator now computes `loaded_state_sha256` from the complete state dict
+  immediately after loading `state.json`, before applying `max_rounds`,
+  `quorum`, roster, or status changes. The canonical stdlib encoding uses
+  sorted keys, UTF-8, `ensure_ascii=False`, and compact separators.
+- Every new `run_config` event carries that digest in addition to all existing
+  fields. The `state.json` shape is unchanged.
+- Replay independently computes the same canonical digest for unresolved
+  checkpoint candidates and uses it as the authoritative match when present.
+  Events without the digest retain the prior round/phase/status best-effort
+  fallback.
+- Added differential regressions for repeated halted vote attempts on both
+  sides of the second halt's checkpoint write. A lower-cap resume now retains
+  the first candidate/abstentions after a crash-before-write and promotes the
+  second candidate/abstentions after a durable write.
+- Added unit coverage proving that states with equal round, completed phase,
+  and status do not match when their full loaded-state digests differ, plus
+  coverage that new Orchestrator events include the digest.
+
+### Loaded-State Identity Verification
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_replay.py -q
+..............................                                           [100%]
+30 passed in 0.04s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_replay_differential.py -q
+....................                                                     [100%]
+20 passed in 0.43s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest tests/test_cli.py -q
+...............................                                          [100%]
+31 passed in 0.33s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -m pytest -q
+........................................................................ [ 26%]
+........................................................................ [ 52%]
+........................................................................ [ 79%]
+.........................................................                [100%]
+273 passed in 3.90s
+
+$ /home/bossbaby/Desktop/fix-me/ai-debate-lab/.venv/bin/python -c "<replay import-purity AST check>"
+IMPORTS: ['copy', 'hashlib', 'json']
+BANNED: []
+
+$ git diff --check
+(no output; exit 0)

@@ -14,6 +14,8 @@ differential test between the two. tests/test_replay_differential.py is what
 keeps them honest.
 """
 import copy
+import hashlib
+import json
 
 
 class MissingGenesis(Exception):
@@ -119,8 +121,17 @@ def _status_setter(value):
     return fold
 
 
+def _state_sha256(st):
+    payload = json.dumps(
+        st, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _matches_loaded_state(st, event):
     """Compare a checkpoint candidate with a new-format run_config."""
+    if "loaded_state_sha256" in event:
+        return _state_sha256(st) == event["loaded_state_sha256"]
     if "last_completed_phase" not in event or "loaded_status" not in event:
         return None
     return (

@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pytest
 
 from debatelab import replay
@@ -14,6 +17,13 @@ def genesis(**over):
 def ev(type_, **kw):
     return {"round": 1, "phase": "propose", "agent": None, "type": type_,
             "content": "", **kw}
+
+
+def state_sha256(state):
+    payload = json.dumps(
+        state, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def test_a_transcript_without_genesis_cannot_be_replayed():
@@ -273,6 +283,38 @@ def test_no_consensus_after_a_lower_cap_preserves_a_loaded_checkpoint():
     assert state["last_completed_phase"] == "critique"
     assert state["critiques"] == {"a": "durable"}
     assert state["status"] == "no_consensus"
+
+
+def test_loaded_state_identity_distinguishes_same_boundary_candidates():
+    first = replay._initial()
+    first.update({
+        "id": "d1",
+        "title": "T",
+        "status": "error",
+        "round": 2,
+        "max_rounds": 2,
+        "quorum": "2/3",
+        "roster": ["a", "b", "c"],
+        "last_completed_phase": "revise",
+        "candidate": {"agent": "b", "text": "first"},
+        "abstained": ["b", "c"],
+    })
+    second = {
+        **first,
+        "candidate": {"agent": "c", "text": "second"},
+        "abstained": ["a", "b"],
+    }
+    event = ev(
+        "run_config",
+        round=2,
+        phase="run",
+        last_completed_phase="revise",
+        loaded_status="error",
+        loaded_state_sha256=state_sha256(first),
+    )
+
+    assert replay._matches_loaded_state(first, event) is True
+    assert replay._matches_loaded_state(second, event) is False
 
 
 def test_abstained_resets_every_phase_not_every_round():

@@ -374,6 +374,73 @@ def test_agrees_after_halted_vote_candidate_then_lower_round_cap(tmp_path):
     assert_agrees(store, did)
 
 
+def _repeat_halted_vote(store, did, *, checkpoint_second):
+    Orchestrator(store, [
+        MockAgent("a", [
+            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
+            "crit a2", "rev a2", "NOMINATE: b", "VOTE: reject\nfirst",
+        ]),
+        MockAgent("b", [
+            "prop b", "crit b", "rev b", "NOMINATE: a", "VOTE: reject\nno",
+            "crit b2", "rev b2", "NOMINATE: a",
+        ]),
+        MockAgent("c", [
+            "prop c", "crit c", "rev c", "NOMINATE: b", "VOTE: reject\nno",
+            "crit c2", "rev c2", "NOMINATE: b",
+        ]),
+    ]).run(did, max_rounds=2)
+    first = store.read_state(did)
+    assert first["status"] == "error"
+    assert first["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert first["abstained"] == ["b", "c"]
+
+    orch = Orchestrator(store, [
+        MockAgent("a", ["NOMINATE: c"]),
+        MockAgent("b", ["NOMINATE: c"]),
+        MockAgent("c", ["NOMINATE: a", "VOTE: reject\nsecond"]),
+    ])
+    real_checkpoint = orch._checkpoint
+
+    def checkpoint(debate_id, state):
+        if checkpoint_second:
+            real_checkpoint(debate_id, state)
+        raise RuntimeError("interrupt second halt checkpoint")
+
+    orch._checkpoint = checkpoint
+    with pytest.raises(RuntimeError, match="second halt checkpoint"):
+        orch.run(did, max_rounds=2)
+
+    Orchestrator(store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]).run(
+        did, max_rounds=1
+    )
+    return store.read_state(did)
+
+
+def test_repeated_halt_discards_second_vote_attempt_if_checkpoint_crashes(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+
+    state = _repeat_halted_vote(store, did, checkpoint_second=False)
+
+    assert state["status"] == "no_consensus"
+    assert state["candidate"] == {"agent": "b", "text": "rev b2"}
+    assert state["abstained"] == ["b", "c"]
+    assert_agrees(store, did)
+
+
+def test_repeated_halt_promotes_second_vote_attempt_if_checkpoint_is_durable(
+        tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+
+    state = _repeat_halted_vote(store, did, checkpoint_second=True)
+
+    assert state["status"] == "no_consensus"
+    assert state["candidate"] == {"agent": "c", "text": "rev c2"}
+    assert state["abstained"] == ["a", "b"]
+    assert_agrees(store, did)
+
+
 def test_agrees_when_resumed_vote_halts_before_selecting_a_candidate(tmp_path):
     store = make_store(tmp_path)
     did = store.create("T", "problem")

@@ -1,6 +1,8 @@
 """Runs a debate: fans out phase prompts to all agents, applies the protocol,
 checkpoints state after every phase so interrupted runs resume."""
 import concurrent.futures as cf
+import hashlib
+import json
 import random
 import time
 from fractions import Fraction
@@ -11,6 +13,13 @@ from .agents.base import AgentError
 from .store import render_summary
 
 DEFAULT_SLEEP = time.sleep
+
+
+def _state_sha256(state):
+    payload = json.dumps(
+        state, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 class DebateHalted(Exception):
@@ -34,6 +43,7 @@ class Orchestrator:
         state = self.store.read_state(debate_id)
         if state["status"] in ("awaiting_human", "approved", "rejected"):
             return state["status"]
+        loaded_state_sha256 = _state_sha256(state)
         loaded_status = state["status"]
         if max_rounds is not None:
             state["max_rounds"] = max_rounds
@@ -66,6 +76,7 @@ class Orchestrator:
             "quorum": state["quorum"],
             "last_completed_phase": state["last_completed_phase"],
             "loaded_status": loaded_status,
+            "loaded_state_sha256": loaded_state_sha256,
         })
         problem = self.store.read_problem(debate_id)
         try:
