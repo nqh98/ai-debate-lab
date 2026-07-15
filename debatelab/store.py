@@ -314,11 +314,12 @@ def render_summary(state: dict) -> str:
     ]
     decision = state.get("human_decision")
     candidate = state.get("candidate")
+    credit = "synthesized by" if (candidate or {}).get("synthesized") else "from"
     if decision:
         lines += ["", f"## Final decision — {decision['decision'].upper()}", ""]
         if candidate:
             lines += [
-                f"Candidate from **{candidate['agent']}**:",
+                f"Candidate {credit} **{candidate['agent']}**:",
                 "",
                 candidate["text"],
                 "",
@@ -328,7 +329,8 @@ def render_summary(state: dict) -> str:
     elif candidate:
         lines += [
             "",
-            f"## Current candidate (from {candidate['agent']}) — pending human decision",
+            f"## Current candidate ({credit} {candidate['agent']}) "
+            "— pending human decision",
             "",
             candidate["text"],
             "",

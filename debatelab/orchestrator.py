@@ -139,6 +139,7 @@ class Orchestrator:
                         "agent": state["candidate"]["agent"],
                         "type": "consensus",
                         "content": state["candidate"]["text"],
+                        "synthesized": state["candidate"]["synthesized"],
                         "tally": protocol.tally(
                             state["votes"], roster_size, quorum_frac
                         ),

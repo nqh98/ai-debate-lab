@@ -183,6 +183,30 @@ def test_render_summary_pending_and_decided():
     assert "ship it" in md
 
 
+def test_summary_credits_a_synthesized_candidate():
+    md = render_summary({
+        "id": "d", "title": "T", "status": "awaiting_human", "round": 1,
+        "max_rounds": 5, "quorum": "2/3", "roster": ["a", "b"],
+        "last_completed_phase": "vote", "proposals": {}, "critiques": {},
+        "candidate": {"agent": "a", "text": "merged", "synthesized": True},
+        "votes": {}, "abstained": [], "human_decision": None,
+    })
+    assert "synthesized by a" in md
+    assert "(from a)" not in md
+
+
+def test_summary_keeps_from_wording_for_a_verbatim_candidate():
+    md = render_summary({
+        "id": "d", "title": "T", "status": "awaiting_human", "round": 1,
+        "max_rounds": 5, "quorum": "2/3", "roster": ["a", "b"],
+        "last_completed_phase": "vote", "proposals": {}, "critiques": {},
+        "candidate": {"agent": "a", "text": "verbatim", "synthesized": False},
+        "votes": {}, "abstained": [], "human_decision": None,
+    })
+    assert "(from a)" in md
+    assert "synthesized" not in md
+
+
 def test_atomic_write_replaces_content_and_leaves_no_tmp(tmp_path):
     p = tmp_path / "summary.md"
     store_mod._atomic_write(p, "a" * 100)

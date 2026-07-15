@@ -52,7 +52,7 @@ def test_approved_result_promotes_latest_consensus_text_to_answer():
         "title": "A question",
         "status": "approved",
         "answer": "Approved answer",
-        "candidate": {"agent": "claude", "round": 3},
+        "candidate": {"agent": "claude", "round": 3, "synthesized": False},
         "tally": {"accepts": 3, "rejects": 0, "abstains": 0, "roster_size": 3,
                   "required": 2},
         "decided_at": "2026-07-15T10:12:03+00:00",
@@ -122,7 +122,9 @@ def test_last_consensus_and_human_decision_win():
 
     assert result["status"] == "approved"
     assert result["answer"] == "second"
-    assert result["candidate"] == {"agent": "second", "round": 4}
+    assert result["candidate"] == {
+        "agent": "second", "round": 4, "synthesized": False,
+    }
     assert result["decided_at"] == "later"
     assert result["note"] == "second decision"
 
@@ -138,7 +140,9 @@ def test_approval_after_no_consensus_promotes_current_run_candidate_text():
 
     assert result["status"] == "approved"
     assert result["answer"] == "fallback plan"
-    assert result["candidate"] == {"agent": "claude", "round": 2}
+    assert result["candidate"] == {
+        "agent": "claude", "round": 2, "synthesized": False,
+    }
 
 
 def test_resume_running_preserves_candidate_for_later_approval():
@@ -153,7 +157,9 @@ def test_resume_running_preserves_candidate_for_later_approval():
 
     assert result["status"] == "approved"
     assert result["answer"] == "fallback plan"
-    assert result["candidate"] == {"agent": "claude", "round": 2}
+    assert result["candidate"] == {
+        "agent": "claude", "round": 2, "synthesized": False,
+    }
 
 
 def test_new_run_and_terminal_outcomes_clear_stale_result_fields():
@@ -233,6 +239,81 @@ def test_unknown_event_types_are_ignored():
     ])
 
     assert result["answer"] == "Approved answer"
+
+
+def test_synthesized_survives_consensus_into_the_result():
+    result = build_result([
+        {"type": "debate_created", "id": "d", "title": "T",
+         "max_rounds": 5, "quorum": "2/3"},
+        {"type": "candidate", "round": 1, "agent": "a", "content": "verbatim"},
+        {"type": "synthesis", "round": 1, "agent": "a", "content": "merged"},
+        {"type": "consensus", "round": 1, "agent": "a", "content": "merged",
+         "synthesized": True, "tally": {"accepts": 3, "rejects": 0,
+         "abstains": 0, "roster_size": 3, "required": 2, "quorum": "2/3"}},
+        {"type": "human_decision", "content": "approved", "ts": "2026-07-15T00:00:00",
+         "note": "ship"},
+    ])
+    assert result["candidate"]["synthesized"] is True
+    assert result["answer"] == "merged"
+
+
+def test_a_fallback_candidate_is_not_marked_synthesized():
+    result = build_result([
+        {"type": "debate_created", "id": "d", "title": "T",
+         "max_rounds": 5, "quorum": "2/3"},
+        {"type": "candidate", "round": 1, "agent": "a", "content": "verbatim"},
+        {"type": "synthesis_failed", "round": 1, "agent": "a",
+         "content": "boom", "reason": "agent_error"},
+        {"type": "consensus", "round": 1, "agent": "a", "content": "verbatim",
+         "synthesized": False, "tally": {"accepts": 3, "rejects": 0,
+         "abstains": 0, "roster_size": 3, "required": 2, "quorum": "2/3"}},
+    ])
+    assert result["candidate"]["synthesized"] is False
+
+
+def test_render_final_credits_a_synthesis_as_synthesized():
+    md = render_final({
+        "id": "d", "title": "T", "status": "approved", "answer": "merged",
+        "candidate": {"agent": "a", "round": 2, "synthesized": True},
+        "tally": None, "decided_at": "2026-07-15T00:00:00", "note": "",
+        "reason": None, "round": 2, "failed_phase": None,
+    })
+    assert "synthesized by **a**, round 2" in md
+    assert "from **a**" not in md
+
+
+def test_render_final_keeps_from_wording_for_a_verbatim_answer():
+    md = render_final({
+        "id": "d", "title": "T", "status": "approved", "answer": "verbatim",
+        "candidate": {"agent": "a", "round": 2, "synthesized": False},
+        "tally": None, "decided_at": "2026-07-15T00:00:00", "note": "",
+        "reason": None, "round": 2, "failed_phase": None,
+    })
+    assert "from **a**, round 2" in md
+    assert "synthesized" not in md
+
+
+def test_render_final_credits_a_rejected_synthesis():
+    md = render_final({
+        "id": "d", "title": "T", "status": "rejected", "answer": None,
+        "candidate": {"agent": "a", "round": 1, "synthesized": True},
+        "tally": None, "decided_at": "2026-07-15T00:00:00", "note": "no",
+        "reason": "no", "round": 1, "failed_phase": None,
+    })
+    assert "Candidate synthesized by **a** (round 1)" in md
+
+
+def test_result_defaults_synthesized_on_a_legacy_snapshot():
+    """no_consensus snapshots written before this cycle have no flag."""
+    result = build_result([
+        {"type": "debate_created", "id": "d", "title": "T",
+         "max_rounds": 1, "quorum": "2/3"},
+        {"type": "no_consensus", "round": 1, "content": "cap reached",
+         "tally": {"accepts": 1, "rejects": 0, "abstains": 2,
+                   "roster_size": 3, "required": 2, "quorum": "2/3"},
+         "candidate": {"agent": "a", "text": "old"}},
+    ])
+    assert result["candidate"]["synthesized"] is False
 
 
 def test_result_module_does_not_import_impure_or_fold_modules():

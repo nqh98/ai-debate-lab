@@ -23,7 +23,11 @@ def build_result(
             candidate = None
             candidate_text = None
             return
-        candidate = {"agent": snapshot.get("agent"), "round": round_}
+        candidate = {
+            "agent": snapshot.get("agent"),
+            "round": round_,
+            "synthesized": snapshot.get("synthesized", False),
+        }
         candidate_text = snapshot.get("text")
 
     for event in events:
@@ -45,10 +49,22 @@ def build_result(
                 candidate = None
                 candidate_text = None
         elif event_type == "candidate":
-            candidate = {"agent": event.get("agent"), "round": event.get("round")}
+            candidate = {
+                "agent": event.get("agent"), "round": event.get("round"),
+                "synthesized": False,
+            }
+            candidate_text = event.get("content")
+        elif event_type == "synthesis":
+            candidate = {
+                "agent": event.get("agent"), "round": event.get("round"),
+                "synthesized": True,
+            }
             candidate_text = event.get("content")
         elif event_type == "consensus":
-            candidate = {"agent": event.get("agent"), "round": event.get("round")}
+            candidate = {
+                "agent": event.get("agent"), "round": event.get("round"),
+                "synthesized": event.get("synthesized", False),
+            }
             candidate_text = event.get("content")
             tally = event.get("tally")
             round_ = event.get("round")
@@ -109,11 +125,18 @@ def _tally_text(tally: dict) -> str:
     )
 
 
+def _credit(candidate: dict) -> str:
+    """How the candidate came to be: a merge of the roster's work, or one
+    agent's own text."""
+    verb = "synthesized by" if candidate.get("synthesized") else "from"
+    return f"{verb} **{candidate['agent']}**"
+
+
 def render_final(result: dict) -> str:
     """Render the final human-facing markdown view of a result document."""
     if result["answer"] is not None:
         provenance = (
-            f"Approved {result['decided_at']} · from **{result['candidate']['agent']}**, "
+            f"Approved {result['decided_at']} · {_credit(result['candidate'])}, "
             f"round {result['candidate']['round']}"
         )
         if result["tally"] is not None:
@@ -126,7 +149,7 @@ def render_final(result: dict) -> str:
         candidate = result["candidate"]
         if candidate is not None:
             message = (
-                f"Candidate from **{candidate['agent']}** (round {candidate['round']}) "
+                f"Candidate {_credit(candidate)} (round {candidate['round']}) "
                 "was **rejected**"
             )
         else:

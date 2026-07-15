@@ -149,7 +149,9 @@ def test_lower_cap_resume_keeps_checkpointed_candidate_for_approval(workdir, cap
 
     result = store.read_result(debate_id)
     assert result["answer"] == checkpointed["text"]
-    assert result["candidate"] == {"agent": checkpointed["agent"], "round": 1}
+    assert result["candidate"] == {
+        "agent": checkpointed["agent"], "round": 1, "synthesized": True,
+    }
     assert checkpointed["text"] in store.read_final(debate_id)
 
 
