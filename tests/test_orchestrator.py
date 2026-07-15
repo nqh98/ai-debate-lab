@@ -4,7 +4,7 @@ import pytest
 
 from debatelab.agents import models
 from debatelab.agents.base import Agent, AgentError, ErrorKind
-from debatelab import prompts, protocol
+from debatelab import orchestrator, prompts, protocol
 from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
@@ -909,3 +909,25 @@ def test_failed_agent_call_omits_the_model_key(tmp_path):
     ]
     assert failed
     assert all("model" not in e for e in failed)
+
+
+def test_grounded_debate_prefaces_prompts_per_agent(tmp_path):
+    store = make_store(tmp_path)
+    ws = {"source": "/repo", "commit": "c0ffee"}
+    did = store.create("t", "the problem", workspace=ws)
+    a, b = happy_agent("a", nominee="b"), happy_agent("b", nominee="a")
+    a.workspace_attached = True
+    b.workspace_attached = False   # e.g. an api-backed voter
+    orchestrator.Orchestrator(store, [a, b]).run(did)
+    assert all("c0ffee" in p for p in a.prompts)
+    assert all("you cannot" in p for p in b.prompts)
+
+
+def test_plain_debate_prompts_are_unprefaced(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("t", "the problem")
+    a, b = happy_agent("a", nominee="b"), happy_agent("b", nominee="a")
+    orchestrator.Orchestrator(store, [a, b]).run(did)
+    for agent in (a, b):
+        assert all("you cannot" not in p for p in agent.prompts)
+        assert all("working directory" not in p for p in agent.prompts)

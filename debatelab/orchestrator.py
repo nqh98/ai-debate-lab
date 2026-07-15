@@ -86,7 +86,19 @@ class Orchestrator:
             "loaded_status": loaded_status,
             "loaded_state_sha256": loaded_state_sha256,
         })
-        problem = self.store.read_problem(debate_id)
+        raw_problem = self.store.read_problem(debate_id)
+        workspace = state.get("workspace")
+        if workspace:
+            problem = {
+                name: prompts.ground_problem(
+                    raw_problem,
+                    self.agents[name].workspace_attached,
+                    workspace["commit"],
+                )
+                for name in self.order
+            }
+        else:
+            problem = {name: raw_problem for name in self.order}
         try:
             while True:
                 rnd, phase = protocol.next_phase(
@@ -288,7 +300,7 @@ class Orchestrator:
     def _phase_propose(self, debate_id, state, problem):
         results = self._fanout(
             debate_id, state, "propose",
-            lambda name: prompts.propose_prompt(name, problem),
+            lambda name: prompts.propose_prompt(name, problem[name]),
         )
         state["proposals"] = results
         for name, text in results.items():
@@ -304,7 +316,7 @@ class Orchestrator:
         def prompt_for(name):
             others = {n: t for n, t in proposals.items() if n != name}
             return prompts.critique_prompt(
-                name, problem, others, reject_reasons or None
+                name, problem[name], others, reject_reasons or None
             )
 
         results = self._fanout(debate_id, state, "critique", prompt_for)
@@ -318,7 +330,9 @@ class Orchestrator:
     def _phase_revise(self, debate_id, state, problem):
         def prompt_for(name):
             own = state["proposals"].get(name, "(no previous proposal)")
-            return prompts.revise_prompt(name, problem, own, state["critiques"])
+            return prompts.revise_prompt(
+                name, problem[name], own, state["critiques"]
+            )
 
         results = self._fanout(debate_id, state, "revise", prompt_for)
         state["proposals"] = {**state["proposals"], **results}
@@ -333,7 +347,9 @@ class Orchestrator:
         names = list(proposals)
         nom_raw = self._fanout(
             debate_id, state, "nominate",
-            lambda name: prompts.nominate_prompt(name, problem, proposals, names),
+            lambda name: prompts.nominate_prompt(
+                name, problem[name], proposals, names
+            ),
             task=models.FAST,
         )
         nominations = {}
@@ -349,7 +365,9 @@ class Orchestrator:
                     state,
                     "nominate",
                     name,
-                    prompts.nominate_prompt(name, problem, proposals, names),
+                    prompts.nominate_prompt(
+                        name, problem[name], proposals, names
+                    ),
                     lambda t: prompts.parse_nomination(t, names),
                     prompts.NOMINATE_REQUIRED,
                     models.FAST,
@@ -401,7 +419,7 @@ class Orchestrator:
         text, error = self._ask_one(
             debate_id, state, "synthesize", winner,
             prompts.synthesize_prompt(
-                winner, problem, state["proposals"], state["critiques"],
+                winner, problem[winner], state["proposals"], state["critiques"],
                 self._reject_reasons(state) or None,
             ),
             models.DEEP,
@@ -436,7 +454,7 @@ class Orchestrator:
         vote_raw = self._fanout(
             debate_id, state, "vote",
             lambda name: prompts.vote_prompt(
-                name, problem, winner, candidate_text
+                name, problem[name], winner, candidate_text
             ),
             task=models.FAST,
         )
@@ -449,7 +467,9 @@ class Orchestrator:
                     state,
                     "vote",
                     name,
-                    prompts.vote_prompt(name, problem, winner, candidate_text),
+                    prompts.vote_prompt(
+                        name, problem[name], winner, candidate_text
+                    ),
                     prompts.parse_vote,
                     prompts.VOTE_REQUIRED,
                     models.FAST,
