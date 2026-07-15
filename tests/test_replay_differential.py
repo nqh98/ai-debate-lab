@@ -4,10 +4,6 @@ Tasks 1-3 can each pass while the two implementations still disagree. This
 file is what proves they don't, and it is the reason the deliberate
 duplication in replay.py is affordable. It is `debate fsck` run in process.
 """
-from fractions import Fraction
-
-import pytest
-
 from debatelab import cli
 from debatelab.agents.base import AgentError, ErrorKind
 from debatelab.orchestrator import Orchestrator
@@ -20,12 +16,7 @@ def assert_agrees(store, did):
     __tracebackhide__ = True
     expected = replay(store.read_events(did))
     actual = store.read_state(did)
-    diffs = {
-        k: (actual.get(k), expected.get(k))
-        for k in set(expected) | set(actual)
-        if expected.get(k) != actual.get(k)
-    }
-    assert not diffs, f"replay disagrees with state.json on {sorted(diffs)}"
+    assert actual == expected, "replay disagrees with state.json"
 
 
 def test_agrees_after_consensus(tmp_path):
