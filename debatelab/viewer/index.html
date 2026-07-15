@@ -59,6 +59,9 @@
   .vote-reject, .vote-abstained { color:var(--bad); font-weight:600; }
   .banner { border-left:4px solid var(--accent); }
   .note { color:var(--muted); font-size:12px; }
+  .hero { border-left:4px solid var(--ok); }
+  .hero h2 { margin:0 0 8px; font-size:16px; }
+  details.transcript > summary { font-size:14px; margin:20px 0 4px; }
 </style>
 </head>
 <body>
@@ -267,6 +270,67 @@ function telemetryNote(attempts) {
   const kind = kinds.length ? " · " + kinds[kinds.length - 1] : "";
   return `${attempts.length} attempts · ${secs}${kind}`;
 }
+
+function tallyText(t) {
+  return `${esc(String(t.accepts))} accept / ${esc(String(t.rejects))} reject` +
+         ` / ${esc(String(t.abstains))} abstain`;
+}
+
+function renderHero(result) {
+  /* Prose only when a human approved it. result.json keeps candidate.text
+     out for this reason; the unapproved candidate keeps its own honest
+     heading further down the page. */
+  if (!result) return "";
+  if (result.answer !== null && result.answer !== undefined) {
+    const c = result.candidate || {};
+    let prov = `Approved ${esc(String(result.decided_at ?? ""))}` +
+      ` · from <strong>${esc(c.agent)}</strong>, round ${esc(String(c.round))}`;
+    if (result.tally) prov += ` · ${tallyText(result.tally)}`;
+    return `<div class="card hero"><h2>Answer</h2>` +
+      `<div class="md">${renderMarkdown(result.answer)}</div>` +
+      `<p class="note">${prov}</p></div>`;
+  }
+  const bits = [];
+  if (result.tally) {
+    bits.push(`${tallyText(result.tally)} of ` +
+      `${esc(String(result.tally.roster_size))} ` +
+      `(${esc(String(result.tally.required))} required)`);
+  }
+  if (result.round !== null && result.round !== undefined) {
+    bits.push(`round ${esc(String(result.round))}`);
+  }
+  if (result.failed_phase) {
+    bits.push(`halted in <strong>${esc(result.failed_phase)}</strong>`);
+  }
+  return `<div class="card hero"><h2>No answer</h2>` +
+    `<p>${esc(result.reason ?? "")}</p>` +
+    (bits.length ? `<p class="note">${bits.join(" · ")}</p>` : "") +
+    `</div>`;
+}
+
+function renderTranscript(events) {
+  const {calls, orphans} = pairTelemetry(events);
+  const index = new Map();
+  (events || []).forEach((e, i) => index.set(e, i));
+  let html = "";
+  for (const r of groupRounds(events)) {
+    html += `<h2>Round ${esc(String(r.round))}</h2>`;
+    for (const p of r.phases) {
+      const flag = p.halted ? ` <span class="note">halted</span>` : "";
+      html += `<h3>${esc(p.phase)}${flag}</h3>`;
+      for (const e of p.events) {
+        html += eventCard(e, telemetryNote(calls.get(index.get(e))));
+      }
+      const stray = orphans.filter(a =>
+        a[0].round === r.round && a[0].phase === p.phase);
+      for (const attempts of stray) {
+        html += `<div class="card note">${esc(attempts[0].agent)} · ` +
+          `unfinished call · ${esc(telemetryNote(attempts))}</div>`;
+      }
+    }
+  }
+  return html;
+}
 </script>
 <script>
 const app = document.getElementById("app");
@@ -326,12 +390,17 @@ function schedulePoll(id, generation) {
   pollTimer = setTimeout(() => showDebate(id, generation), 3000);
 }
 
+async function fetchJSONOptional(url) {
+  try { return await fetchJSON(url); } catch { return null; }
+}
+
 async function showDebate(id, generation) {
   back.hidden = false;
-  let state, events;
+  let state, events, result;
   try {
     state = await fetchJSON(`/${id}/state.json`);
     events = await fetchJSONL(`/${id}/transcript.jsonl`);
+    result = await fetchJSONOptional(`/${id}/result.json`);
   } catch (e) {
     if (!isCurrent(id, generation)) return;
     app.innerHTML = `<p class="muted">failed to load ${esc(id)}: ${esc(String(e))}</p>`;
@@ -342,17 +411,20 @@ async function showDebate(id, generation) {
   let html = `
     <div class="card banner row">
       <div><strong>${esc(state.title)}</strong><br>
-        <span class="muted">${esc(id)} · round ${esc(String(state.round))}/${esc(String(state.max_rounds))}</span>
+        <span class="muted">${esc(id)} · round ${esc(String(state.round))}/${esc(String(state.max_rounds))}${
+          state.roster ? " · roster " + esc(state.roster.join(", ")) : ""}${
+          state.quorum ? " · quorum " + esc(state.quorum) : ""}</span>
       </div>
       ${badge(state.status)}
     </div>`;
+  html += renderHero(result);
   if (state.human_decision) {
     html += `<div class="card banner"><h3>Human decision: ${esc(state.human_decision.decision).toUpperCase()}</h3>
-      <pre>${esc(state.human_decision.note || "(no note)")}</pre></div>`;
+      <div class="md">${renderMarkdown(state.human_decision.note || "(no note)")}</div></div>`;
   }
   if (state.candidate) {
     html += `<h2>Candidate answer (from ${esc(state.candidate.agent)})</h2>
-      <div class="card"><pre>${esc(state.candidate.text)}</pre></div>`;
+      <div class="card md">${renderMarkdown(state.candidate.text)}</div>`;
   }
   const votes = Object.entries(state.votes || {});
   if (votes.length || (state.abstained || []).length) {
@@ -364,11 +436,12 @@ async function showDebate(id, generation) {
         `<div>${esc(a)}: <span class="vote-abstained">abstained</span></div>`
       ).join("") + "</div>";
   }
-  const rounds = [...new Set(events.map(e => e.round))];
-  for (const r of rounds) {
-    html += `<h2>Round ${esc(String(r))}</h2>`;
-    html += events.filter(e => e.round === r).map(eventCard).join("");
-  }
+  /* Collapsed only once there is an answer to read instead. A reviewer at
+     awaiting_human is deciding because of the process, and a halt is only
+     legible from it. */
+  const approved = result && result.status === "approved";
+  html += `<details class="transcript" ${approved ? "" : "open"}>` +
+    `<summary>Debate transcript</summary>${renderTranscript(events)}</details>`;
   app.innerHTML = html;
   if (state.status === "running") {
     schedulePoll(id, generation);

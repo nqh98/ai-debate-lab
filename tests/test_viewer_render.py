@@ -482,3 +482,101 @@ def test_calls_with_no_content_event_are_orphans_not_dropped():
 def test_telemetry_note_of_nothing_is_empty():
     assert render_js("telemetryNote([])") == ""
     assert render_js("telemetryNote(undefined)") == ""
+
+
+APPROVED = {
+    "status": "approved", "answer": "# Use Redis\n\nWith a **TTL**.",
+    "candidate": {"agent": "claude", "round": 2},
+    "tally": {"accepts": 3, "rejects": 0, "abstains": 0,
+              "roster_size": 3, "required": 2},
+    "decided_at": "2026-07-15T10:00:00+00:00", "note": "ship it",
+    "reason": None, "round": 2, "failed_phase": None,
+}
+AWAITING = {
+    "status": "awaiting_human", "answer": None,
+    "candidate": {"agent": "claude", "round": 1},
+    "tally": {"accepts": 2, "rejects": 0, "abstains": 1,
+              "roster_size": 3, "required": 2},
+    "decided_at": None, "note": None,
+    "reason": "candidate is awaiting human review",
+    "round": 1, "failed_phase": None,
+}
+HALTED = {
+    "status": "error", "answer": None, "candidate": None, "tally": None,
+    "decided_at": None, "note": None,
+    "reason": "only 1 agent(s) responded in phase 'critique' — need at least 2",
+    "round": 1, "failed_phase": "critique",
+}
+
+
+@needs_node
+def test_hero_renders_the_answer_as_markdown_when_approved():
+    out = render_js(f"renderHero({json.dumps(APPROVED)})")
+    assert "<h3>Use Redis</h3>" in out
+    assert "<strong>TTL</strong>" in out
+    assert "claude" in out
+    assert "3 accept / 0 reject / 0 abstain" in out
+
+
+@needs_node
+def test_hero_never_renders_unapproved_prose():
+    """result.json keeps candidate.text out on purpose, and the result spec
+    rejected showing the candidate under a status banner. A hero panel is
+    that argument's strongest case: it is the largest thing on the page and
+    the one that survives a screenshot without its banner."""
+    out = render_js(f"renderHero({json.dumps(AWAITING)})")
+    assert "No answer" in out
+    assert "2 accept / 0 reject / 1 abstain" in out
+    assert "awaiting human review" in out
+
+
+@needs_node
+def test_hero_shows_the_failing_phase_on_a_halt():
+    out = render_js(f"renderHero({json.dumps(HALTED)})")
+    assert "critique" in out
+    assert "round 1" in out
+
+
+@needs_node
+def test_hero_is_empty_for_a_legacy_debate_without_a_result():
+    """The four committed debates predate result.json. They lose the hero and
+    keep everything else."""
+    assert render_js("renderHero(null)") == ""
+
+
+@needs_node
+def test_hero_escapes_a_hostile_reason():
+    hostile = dict(HALTED, reason="<script>alert(1)</script>")
+    out = render_js(f"renderHero({json.dumps(hostile)})")
+    assert "<script>" not in out
+
+
+@needs_node
+def test_transcript_renders_grouped_annotated_cards():
+    events = js_events([
+        {"round": 0, "phase": "run", "type": "run_config", "content": "..."},
+        {"round": 1, "phase": "propose", "type": "phase_started"},
+        {"round": 1, "phase": "propose", "agent": "a", "type": "agent_call",
+         "attempt": 1, "duration_ms": 1400, "ok": True, "content": ""},
+        {"round": 1, "phase": "propose", "agent": "a", "type": "proposal",
+         "content": "**bold** plan"},
+        {"round": 1, "phase": "propose", "type": "phase_completed"},
+    ])
+    out = render_js(f"renderTranscript({events})")
+    assert "Round 1" in out
+    assert "propose" in out
+    assert "<strong>bold</strong>" in out
+    assert "1.4s" in out
+    assert "run_config" not in out
+    assert out.count("<details") == 1
+
+
+@needs_node
+def test_transcript_marks_a_halted_phase():
+    events = js_events([
+        {"round": 1, "phase": "critique", "type": "phase_started"},
+        {"round": 1, "phase": "critique", "agent": "a", "type": "abstained",
+         "content": "boom"},
+    ])
+    out = render_js(f"renderTranscript({events})")
+    assert "halted" in out

@@ -81,3 +81,26 @@ def test_viewer_ignores_stale_detail_loads_after_navigation():
     assert "if (!isCurrent(id, generation)) return;" in source
     assert "const generation = ++routeGeneration;" in source
     assert "showDebate(id, generation)" in source
+
+
+def test_debate_result_is_served_when_present(running_server, tmp_path):
+    """The hero panel's source. result.json lives beside state.json under the
+    debates root, so the existing static route already reaches it."""
+    _, body = get(running_server + "/index.json")
+    debate_id = json.loads(body)[0]["id"]
+    (tmp_path / "debates" / debate_id / "result.json").write_text(
+        json.dumps({"status": "approved", "answer": "Use Redis."})
+    )
+    status, body = get(f"{running_server}/{debate_id}/result.json")
+    assert status == 200
+    assert json.loads(body)["answer"] == "Use Redis."
+
+
+def test_missing_result_404s_cleanly(running_server):
+    """The four committed debates predate result.json; the viewer treats a
+    404 as 'legacy debate, no hero' rather than as a failure to load."""
+    _, body = get(running_server + "/index.json")
+    debate_id = json.loads(body)[0]["id"]
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        get(f"{running_server}/{debate_id}/result.json")
+    assert exc.value.code == 404
