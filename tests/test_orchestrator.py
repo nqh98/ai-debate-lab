@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 import pytest
 
 from debatelab.agents import models
@@ -617,3 +619,66 @@ def test_a_permanent_failure_records_exactly_one_attempt(tmp_path):
     ]
     assert [e["attempt"] for e in calls] == [1]
     assert calls[0]["kind"] == "not_found"
+
+
+def _types(store, did, phase=None):
+    return [
+        e["type"] for e in store.read_events(did)
+        if phase is None or e["phase"] == phase
+    ]
+
+
+def test_run_emits_run_config_on_every_run(tmp_path):
+    """Regression: roster_changed fires only when the roster DIFFERS from a
+    previous run, so a first run recorded the roster nowhere — and the roster
+    is the denominator check_consensus divides by."""
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=1
+    )
+    configs = [e for e in store.read_events(did) if e["type"] == "run_config"]
+    assert len(configs) == 1
+    assert configs[0]["roster"] == ["a", "b"]
+    assert configs[0]["max_rounds"] == 1
+    assert configs[0]["quorum"] == "2/3"
+
+
+def test_run_config_records_the_effective_overrides(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=3, quorum=Fraction(1, 2)
+    )
+    config = next(
+        e for e in store.read_events(did) if e["type"] == "run_config"
+    )
+    assert config["max_rounds"] == 3
+    assert config["quorum"] == "1/2"
+
+
+def test_each_phase_is_bracketed_by_started_and_completed(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
+        did, max_rounds=1
+    )
+    for phase in ("propose", "critique", "revise", "vote"):
+        types = _types(store, did, phase)
+        assert types[0] == "phase_started", phase
+        assert "phase_completed" in types, phase
+
+
+def test_a_halted_phase_records_started_without_completed(tmp_path):
+    """The divergence this whole cycle exists for: a phase that raised
+    DebateHalted must be distinguishable from one that finished."""
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(
+        store, [happy_agent("a"), DeadAgent("b"), DeadAgent("c")]
+    ).run(did, max_rounds=1)
+    types = _types(store, did, "propose")
+    assert "phase_started" in types
+    assert "phase_completed" not in types
+    assert store.read_state(did)["status"] == "error"
+    assert store.read_state(did)["last_completed_phase"] is None

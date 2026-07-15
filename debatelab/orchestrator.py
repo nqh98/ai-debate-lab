@@ -48,6 +48,22 @@ class Orchestrator:
             })
         state["roster"] = list(self.order)
         state["status"] = "running"
+        # Every run, not only when something changed — that is precisely the
+        # bug in roster_changed above, which fires on a difference and so
+        # records nothing on a first run. The roster is the denominator
+        # check_consensus divides by; a reader that has to guess it can reach
+        # a different verdict than this run did.
+        self.store.append_event(debate_id, {
+            "round": state["round"], "phase": "run", "agent": None,
+            "type": "run_config",
+            "content": (
+                f"roster {self.order}, max_rounds {state['max_rounds']}, "
+                f"quorum {state['quorum']}"
+            ),
+            "roster": list(self.order),
+            "max_rounds": state["max_rounds"],
+            "quorum": state["quorum"],
+        })
         problem = self.store.read_problem(debate_id)
         try:
             while True:
@@ -67,8 +83,21 @@ class Orchestrator:
                 state["round"] = rnd
                 state["abstained"] = []
                 self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
+                # Brackets the two assignments a reader must reproduce. Without
+                # phase_completed, a phase that raised DebateHalted is
+                # indistinguishable from one that finished; without
+                # phase_started, a halted debate's round cannot be recovered,
+                # because state["round"] is assigned before the phase runs.
+                self.store.append_event(debate_id, {
+                    "round": rnd, "phase": phase, "agent": None,
+                    "type": "phase_started", "content": "",
+                })
                 getattr(self, f"_phase_{phase}")(debate_id, state, problem)
                 state["last_completed_phase"] = phase
+                self.store.append_event(debate_id, {
+                    "round": rnd, "phase": phase, "agent": None,
+                    "type": "phase_completed", "content": "",
+                })
                 quorum_frac = Fraction(state["quorum"])
                 roster_size = len(state["roster"])
                 if phase == "vote" and protocol.check_consensus(
