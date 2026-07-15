@@ -22,11 +22,15 @@ class CliAgent(Agent):
         command: list[str],
         timeout: dict | int | None = None,
         models_command: list[str] | None = None,
+        workdir: str | None = None,
+        workspace_args: list[str] | None = None,
     ):
         super().__init__(name)
         self.command = command
         self.timeout = _normalize_timeout(timeout)
         self.models_command = models_command
+        self.workdir = workdir
+        self.workspace_args = workspace_args
         self._available: list[str] | None = None  # discovered lazily
 
     def ask(self, prompt: str, task: str = models.DEEP) -> Reply:
@@ -40,6 +44,7 @@ class CliAgent(Agent):
                 text=True,
                 timeout=ceiling,
                 stdin=subprocess.DEVNULL,
+                cwd=self.workdir,
             )
         except subprocess.TimeoutExpired:
             raise AgentError(
@@ -69,6 +74,8 @@ class CliAgent(Agent):
                     continue
                 part = part.replace("{model}", model)
             cmd.append(part.replace("{prompt}", prompt))
+        if self.workdir and self.workspace_args:
+            cmd.extend(self.workspace_args)
         return cmd
 
     def _model_for(self, task: str) -> str | None:

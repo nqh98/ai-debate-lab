@@ -210,7 +210,7 @@ def test_run_uses_terminal_status_exit_codes(
 
     monkeypatch.setattr(cli, "get_store", lambda: store)
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -241,7 +241,7 @@ def test_run_exits_one_for_a_predecided_debate(
 
     monkeypatch.setattr(cli, "get_store", lambda: store)
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -394,7 +394,7 @@ def test_run_forwards_force_to_store_lock(workdir, capsys, monkeypatch):
     monkeypatch.setattr(DebateStore, "debate_lock", lambda self, *args, **kwargs:
                         debate_lock(*args, **kwargs))
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -424,7 +424,7 @@ def test_run_forwards_quorum_to_orchestrator(workdir, capsys, monkeypatch):
 
     monkeypatch.setattr(cli, "get_store", lambda: store)
     monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
-    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs, workdir=None: ["a", "b"])
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
@@ -795,3 +795,22 @@ def test_decision_removes_workspace(workdir, capsys):
     assert ws.exists()
     cli.main(["approve", did, "-m", "ok"])
     assert not ws.exists()
+
+
+def test_run_banner_names_attachment(workdir, capsys):
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    config = workdir / "agents.yaml"
+    config.write_text(
+        "agents:\n"
+        "  - name: a\n    backend: cli\n"
+        "    command: [\"echo\", \"{prompt}\"]\n"
+        "    workspace_args: [\"--flag\"]\n"
+        "  - name: b\n    backend: cli\n"
+        "    command: [\"echo\", \"{prompt}\"]\n"
+    )
+    cli.main(["run", did, "--config", str(config), "--max-rounds", "1"])
+    out = capsys.readouterr().out
+    assert "agent 'a': workspace-attached (--flag)" in out
+    assert "agent 'b': workspace-attached (no extra flags)" in out

@@ -102,7 +102,24 @@ def cmd_run(args):
                         "agent": None, "type": "workspace_ready",
                         "content": workspace["commit"],
                     })
-            agents = registry.build_agents(ready)
+            if workspace:
+                for spec in ready:
+                    if registry.resolve_backend(spec) == "cli":
+                        extra = " ".join(spec.workspace_args or [])
+                        print(
+                            f"agent '{spec.name}': workspace-attached "
+                            f"({extra or 'no extra flags'})",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"agent '{spec.name}': no repo access "
+                            f"(api backend)",
+                            flush=True,
+                        )
+            agents = registry.build_agents(
+                ready, workdir=str(workdir) if workdir else None
+            )
             try:
                 orch = Orchestrator(
                     store,

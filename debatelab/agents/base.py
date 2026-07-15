@@ -61,6 +61,11 @@ class Reply:
 
 
 class Agent(ABC):
+    # Overridden per-instance by registry.build_agents; class-level defaults
+    # keep every test double honest without boilerplate.
+    workspace_attached: bool = False
+    stall_after = {"fast": 300, "deep": 900}
+
     def __init__(self, name: str):
         self.name = name
 
