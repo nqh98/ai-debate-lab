@@ -10,6 +10,7 @@ from fractions import Fraction
 from . import prompts, protocol, retry
 from .agents import models
 from .agents.base import AgentError
+from .result import build_result, render_final
 from .store import render_summary
 
 DEFAULT_SLEEP = time.sleep
@@ -158,6 +159,13 @@ class Orchestrator:
     def _checkpoint(self, debate_id, state):
         self.store.write_state(debate_id, state)
         self.store.write_summary(debate_id, render_summary(state))
+        result = build_result(
+            self.store.read_events(debate_id),
+            id_fallback=debate_id,
+            title_fallback=state.get("title"),
+        )
+        self.store.write_result(debate_id, result)
+        self.store.write_final(debate_id, render_final(result))
 
     def _abstain(self, debate_id, state, phase, name, content, reason):
         """Record an agent as abstaining for this phase."""

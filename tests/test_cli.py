@@ -63,6 +63,109 @@ def _make_awaiting(workdir, capsys):
     return store, debate_id
 
 
+def _record_consensus(store, debate_id, answer="the answer"):
+    store.append_event(debate_id, {
+        "round": 1,
+        "phase": "vote",
+        "agent": "a",
+        "type": "consensus",
+        "content": answer,
+        "tally": {
+            "accepts": 2,
+            "rejects": 0,
+            "abstains": 0,
+            "roster_size": 2,
+            "required": 2,
+        },
+    })
+
+
+def test_result_for_awaiting_human_prints_no_answer_and_exits_one(
+    workdir, capsys
+):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    _record_consensus(store, debate_id)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["result", debate_id])
+
+    assert exc.value.code == 1
+    assert "# No answer" in capsys.readouterr().out
+
+
+def test_result_after_approval_prints_answer_and_exits_zero(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    _record_consensus(store, debate_id, "ship postgres")
+    cli.main(["approve", debate_id])
+    capsys.readouterr()
+
+    cli.main(["result", debate_id])
+
+    out = capsys.readouterr().out
+    assert "# Answer" in out
+    assert "ship postgres" in out
+
+
+def test_result_json_prints_parseable_answer(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    _record_consensus(store, debate_id, "ship postgres")
+    cli.main(["approve", debate_id])
+    capsys.readouterr()
+
+    cli.main(["result", debate_id, "--json"])
+
+    assert json.loads(capsys.readouterr().out)["answer"] == "ship postgres"
+
+
+@pytest.mark.parametrize(
+    ("status", "exit_code"),
+    [("awaiting_human", None), ("no_consensus", 1), ("error", 3)],
+)
+def test_run_uses_terminal_status_exit_codes(
+    workdir, capsys, monkeypatch, status, exit_code
+):
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("Topic", "problem")
+
+    class FakeOrchestrator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            return status
+
+    monkeypatch.setattr(cli, "get_store", lambda: store)
+    monkeypatch.setattr(cli.registry, "load_agent_specs", lambda config: [])
+    monkeypatch.setattr(cli.registry, "build_agents", lambda specs: ["a", "b"])
+    from debatelab import orchestrator
+    monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
+
+    if exit_code is None:
+        cli.main(["run", debate_id])
+    else:
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["run", debate_id])
+        assert exc.value.code == exit_code
+
+
+def test_decide_and_reconciliation_regenerate_all_derived_views(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    _record_consensus(store, debate_id)
+
+    cli.main(["approve", debate_id])
+    debate_path = store.path(debate_id)
+    for name in ("summary.md", "result.json", "final.md"):
+        assert (debate_path / name).exists()
+    assert json.loads((debate_path / "result.json").read_text())["answer"] == "the answer"
+
+    for name in ("summary.md", "result.json", "final.md"):
+        (debate_path / name).unlink()
+    cli.main(["approve", debate_id])
+
+    for name in ("summary.md", "result.json", "final.md"):
+        assert (debate_path / name).exists()
+
+
 def test_approve_records_decision(workdir, capsys):
     store, debate_id = _make_awaiting(workdir, capsys)
     cli.main(["approve", debate_id, "-m", "looks right"])
@@ -191,8 +294,10 @@ def test_run_forwards_force_to_store_lock(workdir, capsys, monkeypatch):
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
-    cli.main(["run", debate_id, "--force"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", debate_id, "--force"])
 
+    assert exc.value.code == 1
     assert calls == {"debate_id": debate_id, "force": True}
 
 
@@ -219,8 +324,10 @@ def test_run_forwards_quorum_to_orchestrator(workdir, capsys, monkeypatch):
     from debatelab import orchestrator
     monkeypatch.setattr(orchestrator, "Orchestrator", FakeOrchestrator)
 
-    cli.main(["run", debate_id, "--quorum", "3/4"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", debate_id, "--quorum", "3/4"])
 
+    assert exc.value.code == 1
     assert calls == {
         "debate_id": debate_id,
         "max_rounds": None,

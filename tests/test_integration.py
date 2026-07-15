@@ -5,6 +5,7 @@ import pytest
 
 from debatelab import cli
 from debatelab.agents import registry
+from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
 from .conftest import MockAgent
@@ -105,3 +106,16 @@ def test_reject_reasons_reach_round_two_prompts(workdir, capsys, monkeypatch):
     round2_critique_prompt = alpha.prompts[5]  # calls 0-4 are round 1
     assert "Rejection reasons" in round2_critique_prompt
     assert "no connection pooling story" in round2_critique_prompt
+
+
+def test_checkpoint_writes_all_derived_views_atomically(workdir):
+    store = DebateStore(workdir / "debates")
+    debate_id = store.create("Topic", "problem")
+
+    Orchestrator(store, scripted_agents()).run(debate_id)
+
+    debate_path = store.path(debate_id)
+    assert (debate_path / "summary.md").exists()
+    assert json.loads((debate_path / "result.json").read_text())["status"] == "awaiting_human"
+    assert (debate_path / "final.md").read_text().startswith("# No answer")
+    assert not list(debate_path.glob("*.tmp"))

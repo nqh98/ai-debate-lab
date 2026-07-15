@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import replay as replay_mod
 from .agents import models, registry
+from .result import build_result, render_final
 from .store import DebateStore, LockError, render_summary
 
 
@@ -82,6 +83,10 @@ def cmd_run(args):
             f"review with `debate show {args.id}`, then "
             f"`debate approve {args.id}` or `debate reject {args.id} -m ...`"
         )
+    if status == "no_consensus":
+        sys.exit(1)
+    if status == "error":
+        sys.exit(3)
 
 
 def _status_line(state):
@@ -103,6 +108,33 @@ def cmd_list(args):
 
 def cmd_show(args):
     print(get_store().read_summary(args.id) or "(no summary yet)")
+
+
+def cmd_result(args):
+    store = get_store()
+    state = store.read_state(args.id)
+    result = build_result(
+        store.read_events(args.id),
+        id_fallback=args.id,
+        title_fallback=state.get("title"),
+    )
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(render_final(result), end="")
+    if result["status"] != "approved":
+        sys.exit(1)
+
+
+def _write_derived_views(store, debate_id, state):
+    result = build_result(
+        store.read_events(debate_id),
+        id_fallback=debate_id,
+        title_fallback=state.get("title"),
+    )
+    store.write_summary(debate_id, render_summary(state))
+    store.write_result(debate_id, result)
+    store.write_final(debate_id, render_final(result))
 
 
 # Events that can describe a checkpoint, although each is appended before its
@@ -209,7 +241,7 @@ def cmd_decide(args, decision):
         }
         state["status"] = recorded_decision
         store.write_state(args.id, state)
-        store.write_summary(args.id, render_summary(state))
+        _write_derived_views(store, args.id, state)
         store.rebuild_index()
         print(f"{args.id}: {recorded_decision}")
         return
@@ -232,7 +264,7 @@ def cmd_decide(args, decision):
         },
     )
     store.write_state(args.id, state)
-    store.write_summary(args.id, render_summary(state))
+    _write_derived_views(store, args.id, state)
     store.rebuild_index()
     print(f"{args.id}: {decision}")
 
@@ -339,6 +371,11 @@ def main(argv=None):
     sp = sub.add_parser("show", help="print a debate's summary")
     sp.add_argument("id")
     sp.set_defaults(fn=cmd_show)
+
+    sp = sub.add_parser("result", help="print the final answer or no-answer result")
+    sp.add_argument("id")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(fn=cmd_result)
 
     sp = sub.add_parser(
         "fsck", help="check state.json against a replay of the transcript"
