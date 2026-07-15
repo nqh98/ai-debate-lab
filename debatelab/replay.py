@@ -78,8 +78,8 @@ def _run_config(st, e):
 def _phase_started(st, e):
     st["round"] = e["round"]          # mirrors orchestrator.py:67
     st["abstained"] = []              # mirrors orchestrator.py:68
-    if e["phase"] == "vote":
-        st["candidate"] = None        # mirrors orchestrator.py:70
+    if e["phase"] == "nominate":
+        st["candidate"] = None        # mirrors orchestrator.py:113
 
 
 def _phase_completed(st, e):

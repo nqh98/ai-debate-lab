@@ -369,7 +369,7 @@ def test_agrees_after_halted_vote_candidate_then_lower_round_cap(tmp_path):
     state = store.read_state(did)
     assert state["status"] == "no_consensus"
     assert state["round"] == 2
-    assert state["last_completed_phase"] == "revise"
+    assert state["last_completed_phase"] == "nominate"
     assert state["candidate"] == {"agent": "b", "text": "rev b2"}
     assert_agrees(store, did)
 
@@ -436,22 +436,25 @@ def test_repeated_halt_promotes_second_vote_attempt_if_checkpoint_is_durable(
     state = _repeat_halted_vote(store, did, checkpoint_second=True)
 
     assert state["status"] == "no_consensus"
-    assert state["candidate"] == {"agent": "c", "text": "rev c2"}
+    assert state["candidate"] == {"agent": "b", "text": "rev b2"}
     assert state["abstained"] == ["a", "b"]
     assert_agrees(store, did)
 
 
-def test_agrees_when_resumed_vote_halts_before_selecting_a_candidate(tmp_path):
+def test_agrees_when_resumed_nominate_halts_before_selecting_a_candidate(tmp_path):
+    """A halt inside the nominate fanout itself -- before a candidate is
+    chosen -- must leave the candidate None both before and after resume."""
     store = make_store(tmp_path)
     did = store.create("T", "problem")
     Orchestrator(store, [
-        MockAgent("a", [
-            "prop a", "crit a", "rev a", "NOMINATE: b", "VOTE: reject\nno",
-        ]),
-        MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a"]),
-        MockAgent("c", ["prop c", "crit c", "rev c", "NOMINATE: a"]),
+        MockAgent("a", ["prop a", "crit a", "rev a", "NOMINATE: b"]),
+        MockAgent("b", ["prop b", "crit b", "rev b"]),
+        MockAgent("c", ["prop c", "crit c", "rev c"]),
     ]).run(did, max_rounds=1)
-    assert store.read_state(did)["candidate"] is not None
+    halted = store.read_state(did)
+    assert halted["status"] == "error"
+    assert halted["candidate"] is None
+    assert_agrees(store, did)
 
     Orchestrator(store, [
         MockAgent("a", ["NOMINATE: b"]),

@@ -15,7 +15,7 @@ def test_next_phase_fresh_debate_starts_with_propose():
 def test_next_phase_walks_round_one():
     assert protocol.next_phase(1, "propose") == (1, "critique")
     assert protocol.next_phase(1, "critique") == (1, "revise")
-    assert protocol.next_phase(1, "revise") == (1, "vote")
+    assert protocol.next_phase(1, "revise") == (1, "nominate")
 
 
 def test_next_phase_after_vote_skips_propose():
@@ -96,3 +96,13 @@ def test_tally_derives_abstains_from_the_roster():
         "accepts": 1, "rejects": 1, "abstains": 3,
         "roster_size": 5, "required": 4, "quorum": "2/3",
     }
+
+
+def test_next_phase_walks_nominate_before_vote():
+    assert protocol.next_phase(1, "revise") == (1, "nominate")
+    assert protocol.next_phase(1, "nominate") == (1, "vote")
+
+
+def test_next_phase_still_ends_the_round_on_vote():
+    assert protocol.next_phase(1, "vote") == (2, "critique")
+    assert protocol.next_phase(0, None) == (1, "propose")

@@ -327,9 +327,7 @@ def test_abstained_resets_every_phase_not_every_round():
     assert state["abstained"] == []
 
 
-def test_abstained_unions_across_the_vote_phases_two_fanouts():
-    """_phase_vote fans out twice (nominate, then vote) inside one phase, and
-    both append to the same list."""
+def test_abstained_unions_across_multiple_abstentions_in_one_phase():
     state = replay.replay([
         genesis(),
         ev("phase_started", round=1, phase="vote"),
@@ -342,20 +340,20 @@ def test_abstained_unions_across_the_vote_phases_two_fanouts():
 def test_candidate_and_terminal_statuses():
     state = replay.replay([
         genesis(),
-        ev("phase_started", phase="vote"),
-        ev("candidate", phase="vote", agent="a", content="the answer"),
+        ev("phase_started", phase="nominate"),
+        ev("candidate", phase="nominate", agent="a", content="the answer"),
         ev("consensus", phase="vote", agent="a", content="the answer"),
     ])
     assert state["candidate"] == {"agent": "a", "text": "the answer"}
     assert state["status"] == "awaiting_human"
 
 
-def test_a_new_vote_attempt_clears_the_prior_candidate():
+def test_a_new_nominate_attempt_clears_the_prior_candidate():
     state = replay.replay([
         genesis(),
-        ev("phase_started", round=1, phase="vote"),
-        ev("candidate", round=1, phase="vote", agent="a", content="old"),
-        ev("phase_started", round=1, phase="vote"),
+        ev("phase_started", round=1, phase="nominate"),
+        ev("candidate", round=1, phase="nominate", agent="a", content="old"),
+        ev("phase_started", round=1, phase="nominate"),
     ])
     assert state["candidate"] is None
 

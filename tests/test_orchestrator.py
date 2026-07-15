@@ -571,7 +571,7 @@ def test_agent_call_events_carry_phase_task_and_duration(tmp_path):
     assert all(isinstance(e["duration_ms"], int) for e in calls)
     assert all(e["duration_ms"] >= 0 for e in calls)
     assert {e["phase"] for e in calls} == {
-        "propose", "critique", "revise", "vote"
+        "propose", "critique", "revise", "nominate", "vote"
     }
     assert {e["task"] for e in calls} == {models.DEEP, models.FAST}
 
@@ -655,7 +655,7 @@ def test_each_phase_is_bracketed_by_started_and_completed(tmp_path):
     Orchestrator(store, [happy_agent("a"), happy_agent("b")]).run(
         did, max_rounds=1
     )
-    for phase in ("propose", "critique", "revise", "vote"):
+    for phase in ("propose", "critique", "revise", "nominate", "vote"):
         types = _types(store, did, phase)
         assert types[0] == "phase_started", phase
         assert "phase_completed" in types, phase
@@ -677,3 +677,29 @@ def test_a_halted_phase_records_started_without_completed(tmp_path):
     error = next(e for e in store.read_events(did) if e["type"] == "error")
     assert error["phase"] == "end"
     assert error["failed_phase"] == "propose"
+
+
+def test_nominations_are_recorded_under_the_nominate_phase(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(
+        store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]
+    ).run(did, max_rounds=1)
+    events = store.read_events(did)
+    for kind in ("nomination", "candidate"):
+        phases = {e["phase"] for e in events if e["type"] == kind}
+        assert phases == {"nominate"}, f"{kind} should be a nominate event"
+    votes = {e["phase"] for e in events if e["type"] == "vote"}
+    assert votes == {"vote"}
+
+
+def test_nominate_and_vote_are_separately_bracketed(tmp_path):
+    store = make_store(tmp_path)
+    did = store.create("T", "problem")
+    Orchestrator(
+        store, [happy_agent("a"), happy_agent("b"), happy_agent("c")]
+    ).run(did, max_rounds=1)
+    started = [
+        e["phase"] for e in store.read_events(did) if e["type"] == "phase_started"
+    ]
+    assert started == ["propose", "critique", "revise", "nominate", "vote"]

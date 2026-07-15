@@ -110,7 +110,7 @@ class Orchestrator:
                     break
                 state["round"] = rnd
                 state["abstained"] = []
-                if phase == "vote":
+                if phase == "nominate":
                     state["candidate"] = None
                 self.progress(f"round {rnd}/{state['max_rounds']}: {phase}")
                 # Brackets the two assignments a reader must reproduce. Without
@@ -293,18 +293,18 @@ class Orchestrator:
                 "type": "revision", "content": text,
             })
 
-    def _phase_vote(self, debate_id, state, problem):
+    def _phase_nominate(self, debate_id, state, problem):
         proposals = state["proposals"]
         names = list(proposals)
         nom_raw = self._fanout(
-            debate_id, state, "vote",
+            debate_id, state, "nominate",
             lambda name: prompts.nominate_prompt(name, problem, proposals, names),
             task=models.FAST,
         )
         nominations = {}
         for name, text in nom_raw.items():
             self.store.append_event(debate_id, {
-                "round": state["round"], "phase": "vote", "agent": name,
+                "round": state["round"], "phase": "nominate", "agent": name,
                 "type": "nomination", "content": text,
             })
             nominee = prompts.parse_nomination(text, names)
@@ -312,7 +312,7 @@ class Orchestrator:
                 nominee, retry_text = self._reask(
                     debate_id,
                     state,
-                    "vote",
+                    "nominate",
                     name,
                     prompts.nominate_prompt(name, problem, proposals, names),
                     lambda t: prompts.parse_nomination(t, names),
@@ -322,13 +322,13 @@ class Orchestrator:
                 if retry_text is not None:
                     text = retry_text
                     self.store.append_event(debate_id, {
-                        "round": state["round"], "phase": "vote", "agent": name,
-                        "type": "nomination_retry", "content": retry_text,
-                        "nominee": nominee,
+                        "round": state["round"], "phase": "nominate",
+                        "agent": name, "type": "nomination_retry",
+                        "content": retry_text, "nominee": nominee,
                     })
             if nominee == name:
                 self.store.append_event(debate_id, {
-                    "round": state["round"], "phase": "vote", "agent": name,
+                    "round": state["round"], "phase": "nominate", "agent": name,
                     "type": "nomination_dropped", "content": text,
                     "reason": "self-nomination",
                 })
@@ -341,7 +341,7 @@ class Orchestrator:
         )
         if was_fallback:
             self.store.append_event(debate_id, {
-                "round": state["round"], "phase": "vote", "agent": winner,
+                "round": state["round"], "phase": "nominate", "agent": winner,
                 "type": "fallback_candidate",
                 "content": (
                     "no valid nominations; candidate chosen by seeded draw"
@@ -349,13 +349,17 @@ class Orchestrator:
             })
         state["candidate"] = {"agent": winner, "text": proposals[winner]}
         self.store.append_event(debate_id, {
-            "round": state["round"], "phase": "vote", "agent": winner,
+            "round": state["round"], "phase": "nominate", "agent": winner,
             "type": "candidate", "content": proposals[winner],
         })
+
+    def _phase_vote(self, debate_id, state, problem):
+        winner = state["candidate"]["agent"]
+        candidate_text = state["candidate"]["text"]
         vote_raw = self._fanout(
             debate_id, state, "vote",
             lambda name: prompts.vote_prompt(
-                name, problem, winner, proposals[winner]
+                name, problem, winner, candidate_text
             ),
             task=models.FAST,
         )
@@ -368,9 +372,7 @@ class Orchestrator:
                     state,
                     "vote",
                     name,
-                    prompts.vote_prompt(
-                        name, problem, winner, proposals[winner]
-                    ),
+                    prompts.vote_prompt(name, problem, winner, candidate_text),
                     prompts.parse_vote,
                     prompts.VOTE_REQUIRED,
                     models.FAST,
