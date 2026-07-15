@@ -9,7 +9,7 @@ Predecessor: `specs/2026-07-14-protocol-correctness-design.md` ("Deferred roadma
 
 Make the debate produce an answer the debate actually built, rather than electing one agent's text and calling it the result.
 
-Scope: the protocol's phase sequence, the split of the compound `vote` phase, one new phase and its prompt, and the candidate provenance that the existing result and viewer layers need in order to describe what they are showing. No new state keys, no new artifacts, no changes to voting rules, quorum, retries, or the halt condition. `retry.py` and `store.py` are not touched.
+Scope: the protocol's phase sequence, the split of the compound `vote` phase, one new phase and its prompt, and the candidate provenance that the three existing views need in order to describe what they are showing. No new state keys, no new artifacts, no changes to voting rules, quorum, retries, or the halt condition. `retry.py` is not touched, and `store.py` only in `render_summary`'s two candidate headings (§8).
 
 The five preceding cycles hardened the mechanism: strict parsing, a quorum over a recorded roster, seeded selection, backoff, a verifiable replay, machine-readable results, a readable viewer. The mechanism is now trustworthy, and what it faithfully reports is that agent A's unmodified proposal won a plurality. That is the remaining gap, and it is a product gap rather than a correctness one — the first of this series.
 
@@ -182,7 +182,7 @@ The highest-risk file in the cycle, and the best-defended. `replay.py` is a deli
 
 **No staging.** The `attempt` machinery (`replay.py:211-252`) exists so that a re-run phase *replaces* accumulated dict state rather than merging it — `critiques` on `phase_completed` of `critique`, `votes` on `phase_completed` of `vote`. Synthesis writes one candidate and one `proposals` key, so last-wins is already correct, which is the same reason `candidate` is unstaged today. Those two commit branches are untouched: votes and critiques still occur only in their own phases, and the split moves neither.
 
-### 8. `result.py` and the viewer
+### 8. `result.py`, `summary.md`, and the viewer
 
 `build_result`'s `consensus` handler **rebuilds** the candidate dict from the event (`result.py:50-53`) rather than amending the existing one, so it would silently drop `synthesized`. The `consensus` event therefore carries the flag explicitly, exactly as it already carries `tally` (`orchestrator.py:142-144`). `no_consensus` needs nothing: it serializes `state["candidate"]` whole (`:108`), and `set_candidate` reads the snapshot (`result.py:20-27`).
 
@@ -196,6 +196,10 @@ Approved 2026-07-15T… · from **A**, round 2 · 3 accept / 0 reject / 0 abstai
 ```
 
 The second is today's wording, retained for the fallback. The rejected-candidate branch (`result.py:126-133`) splits the same way. This one-word difference is the cycle's entire user-visible payoff: the answer stops being *agent A's text* and becomes *A's merge of the roster's work*.
+
+**`summary.md` is the third view that credits a candidate**, and it splits identically: `render_summary` prints `Candidate from **A**` (`store.py:321`) and `## Current candidate (from A) — pending human decision` (`store.py:331`). Leaving it alone would have `final.md` credit a merge while `summary.md`, describing the same candidate, credits its author.
+
+The wording is duplicated inline rather than shared. `result.py` imports nothing and `store.py` does not import it, so a shared helper is available — but the viewer must express the same rule in JavaScript regardless, so factoring it would unify two of three sites at the cost of a new dependency from the I/O module to the projection module. A one-line ternary is not worth that.
 
 **The viewer needs one edit: the hero panel's provenance line**, mirroring `render_final`. The event taxonomy needs nothing — `classifyEvent` defaults unknown types to `content` by explicit design, "A new event type must degrade to a card, never blank the reading view" (`viewer/index.html:192-195`), so `synthesis` and `synthesis_failed` render as content cards on arrival. Phase grouping is generic over `PHASE_DELIMITERS` (`:186`), so six phases group without change. `2026-07-15-viewer-rendering-design.md` §1 wrote that taxonomy specifically so the next cycle would not silently degrade the viewer the way the reliability and replay cycles did. This is that cycle, and it does not.
 
