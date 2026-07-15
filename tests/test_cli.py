@@ -9,6 +9,7 @@ from debatelab.orchestrator import Orchestrator
 from debatelab.store import DebateStore
 
 from .conftest import happy_agent, make_store
+from .test_workspace import make_repo
 
 
 @pytest.fixture
@@ -735,3 +736,17 @@ def test_approve_releases_the_lock_when_it_finishes(workdir, capsys):
     store, debate_id = _make_awaiting(workdir, capsys)
     cli.main(["approve", debate_id, "-m", "ok"])
     assert not (workdir / "debates" / debate_id / "debate.lock").exists()
+
+
+def test_new_with_repo_pins_workspace(workdir, capsys):
+    repo = make_repo(workdir)
+    cli.main(["new", "problem text", "--repo", str(repo)])
+    did = capsys.readouterr().out.strip().splitlines()[-1]
+    state = json.loads((workdir / "debates" / did / "state.json").read_text())
+    assert state["workspace"]["source"] == str(repo.resolve())
+    assert len(state["workspace"]["commit"]) == 40
+
+
+def test_new_with_bad_repo_exits_with_error(workdir, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["new", "problem text", "--repo", str(workdir / "nope")])

@@ -141,7 +141,7 @@ class DebateStore:
             raise ValueError(f"invalid debate id {debate_id!r}: outside debate root")
         return target
 
-    def create(self, title, problem, context_texts=()) -> str:
+    def create(self, title, problem, context_texts=(), workspace=None) -> str:
         base = f"{datetime.now().strftime('%Y%m%d')}-{slugify(title)}"
         debate_id, n = base, 2
         while self.path(debate_id).exists():
@@ -163,6 +163,7 @@ class DebateStore:
             "type": "debate_created", "content": title,
             "id": debate_id, "title": title,
             "max_rounds": DEFAULT_MAX_ROUNDS, "quorum": DEFAULT_QUORUM,
+            **({"workspace": workspace} if workspace else {}),
         })
         self.write_state(
             debate_id,
@@ -181,6 +182,7 @@ class DebateStore:
                 "votes": {},
                 "abstained": [],
                 "human_decision": None,
+                **({"workspace": workspace} if workspace else {}),
             },
         )
         self.rebuild_index()

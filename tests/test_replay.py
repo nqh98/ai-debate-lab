@@ -502,3 +502,16 @@ def test_the_candidate_resets_on_nominate_not_vote():
     assert replay.replay(
         base + [ev("phase_started", round=2, phase="nominate")]
     )["candidate"] is None
+
+
+def test_replay_folds_workspace_from_genesis():
+    ws = {"source": "/some/repo", "commit": "a" * 40}
+    assert replay.replay([genesis(workspace=ws)])["workspace"] == ws
+
+
+def test_replay_without_workspace_key_stays_keyless():
+    assert "workspace" not in replay.replay([genesis()])
+
+
+def test_workspace_ready_is_audit_only():
+    assert "workspace_ready" in replay.AUDIT_ONLY

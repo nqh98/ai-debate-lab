@@ -39,12 +39,19 @@ def get_store() -> DebateStore:
 
 def cmd_new(args):
     store = get_store()
+    workspace = None
+    if args.repo:
+        from . import workspace as workspace_mod
+        try:
+            workspace = workspace_mod.pin(args.repo)
+        except workspace_mod.WorkspaceError as e:
+            sys.exit(f"--repo: {e}")
     contexts = []
     for f in args.context or []:
         p = Path(f)
         contexts.append((p.name, p.read_text()))
     title = args.problem.strip().splitlines()[0][:60]
-    print(store.create(title, args.problem, contexts))
+    print(store.create(title, args.problem, contexts, workspace=workspace))
 
 
 def cmd_run(args):
@@ -359,6 +366,11 @@ def main(argv=None):
     sp = sub.add_parser("new", help="create a debate")
     sp.add_argument("problem")
     sp.add_argument("--context", nargs="*", help="context files to include")
+    sp.add_argument(
+        "--repo",
+        help="ground the debate in this git repository (agents get a "
+        "disposable checkout of its current HEAD)",
+    )
     sp.set_defaults(fn=cmd_new)
 
     sp = sub.add_parser("run", help="run debate rounds until consensus or cap")
