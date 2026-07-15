@@ -1,7 +1,9 @@
 import json
+from pathlib import Path
 
 import pytest
 
+from debatelab import store as store_mod
 from debatelab.store import DebateStore, render_summary, slugify
 
 
@@ -125,3 +127,41 @@ def test_render_summary_pending_and_decided():
     md = render_summary(state)
     assert "APPROVED" in md
     assert "ship it" in md
+
+
+def test_atomic_write_replaces_content_and_leaves_no_tmp(tmp_path):
+    p = tmp_path / "summary.md"
+    store_mod._atomic_write(p, "a" * 100)
+    store_mod._atomic_write(p, "b")
+    assert p.read_text() == "b"
+    assert list(tmp_path.iterdir()) == [p]
+
+
+def test_atomic_write_tmp_keeps_the_full_target_name(tmp_path, monkeypatch):
+    """with_suffix('.json.tmp') would turn summary.md into summary.json.tmp;
+    the tmp file must sit beside the target so replace() is a same-filesystem
+    rename, which is what makes it atomic."""
+    seen = {}
+    original = Path.replace
+
+    def spy(self, target):
+        seen["tmp"] = self.name
+        seen["dir"] = self.parent
+        return original(self, target)
+
+    monkeypatch.setattr(Path, "replace", spy)
+    store_mod._atomic_write(tmp_path / "summary.md", "x")
+    assert seen["tmp"] == "summary.md.tmp"
+    assert seen["dir"] == tmp_path
+
+
+def test_write_summary_and_rebuild_index_leave_no_tmp_behind(tmp_path):
+    store = DebateStore(tmp_path / "debates")
+    did = store.create("T", "problem")
+    store.write_summary(did, "# hi")
+    store.rebuild_index()
+    root = tmp_path / "debates"
+    assert not (root / "index.json.tmp").exists()
+    assert not (root / did / "summary.md.tmp").exists()
+    assert not (root / did / "state.json.tmp").exists()
+    assert (root / did / "summary.md").read_text() == "# hi"

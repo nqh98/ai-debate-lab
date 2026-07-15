@@ -17,6 +17,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, then rename.
+
+    `with_name`, not `with_suffix`: with_suffix('.json.tmp') only works when
+    the target already ends in .json and would turn summary.md into
+    summary.json.tmp. Same directory means replace() is a same-filesystem
+    rename, which is what makes it atomic for readers.
+
+    No fsync: the goal is that the polling viewer never sees a torn file, not
+    that writes survive power loss.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
 class DebateStore:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -88,10 +104,10 @@ class DebateStore:
         return [json.loads(line) for line in text.splitlines() if line.strip()]
 
     def write_state(self, debate_id, state: dict):
-        p = self.path(debate_id) / "state.json"
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-        tmp.replace(p)
+        _atomic_write(
+            self.path(debate_id) / "state.json",
+            json.dumps(state, indent=2, ensure_ascii=False),
+        )
 
     def read_state(self, debate_id) -> dict:
         return json.loads((self.path(debate_id) / "state.json").read_text())
@@ -100,7 +116,7 @@ class DebateStore:
         return (self.path(debate_id) / "problem.md").read_text()
 
     def write_summary(self, debate_id, markdown: str):
-        (self.path(debate_id) / "summary.md").write_text(markdown)
+        _atomic_write(self.path(debate_id) / "summary.md", markdown)
 
     def read_summary(self, debate_id) -> str:
         p = self.path(debate_id) / "summary.md"
@@ -131,7 +147,7 @@ class DebateStore:
                 }
             )
         self.root.mkdir(exist_ok=True)
-        (self.root / "index.json").write_text(json.dumps(entries, indent=2))
+        _atomic_write(self.root / "index.json", json.dumps(entries, indent=2))
 
 
 def render_summary(state: dict) -> str:
