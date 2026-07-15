@@ -94,6 +94,35 @@ def test_full_debate_to_approval(workdir, capsys):
     assert index[0]["status"] == "approved"
 
 
+def test_no_consensus_candidate_can_be_approved_and_returned(workdir, capsys, monkeypatch):
+    agents = [
+        MockAgent("alpha", [
+            "use postgres", "critique", "use postgres with replicas",
+            "NOMINATE: alpha", "VOTE: accept\\nyes",
+        ]),
+        MockAgent("bravo", [
+            "use mysql", "critique", "use mysql",
+            "NOMINATE: alpha", "VOTE: reject\\nno",
+        ]),
+    ]
+    monkeypatch.setattr(registry, "build_agents", lambda specs: agents)
+    cli.main(["new", "Which database should we use?"])
+    debate_id = capsys.readouterr().out.strip()
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", debate_id, "--max-rounds", "1"])
+    assert exc.value.code == 1
+    capsys.readouterr()
+
+    cli.main(["approve", debate_id])
+    capsys.readouterr()
+    cli.main(["result", debate_id])
+
+    out = capsys.readouterr().out
+    assert "# Answer" in out
+    assert "use postgres with replicas" in out
+
+
 def test_reject_reasons_reach_round_two_prompts(workdir, capsys, monkeypatch):
     cli.main(["new", "Which database should we use?"])
     debate_id = capsys.readouterr().out.strip()

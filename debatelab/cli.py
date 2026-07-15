@@ -122,7 +122,7 @@ def cmd_result(args):
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(render_final(result), end="")
-    if result["status"] != "approved":
+    if result["status"] != "approved" or result["answer"] is None:
         sys.exit(1)
 
 

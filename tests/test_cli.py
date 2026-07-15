@@ -117,6 +117,28 @@ def test_result_json_prints_parseable_answer(workdir, capsys):
     assert json.loads(capsys.readouterr().out)["answer"] == "ship postgres"
 
 
+def test_result_requires_an_answer_even_when_the_result_is_approved(workdir, capsys):
+    store, debate_id = _make_awaiting(workdir, capsys)
+    state = store.read_state(debate_id)
+    state["status"] = "no_consensus"
+    store.write_state(debate_id, state)
+    store.append_event(debate_id, {
+        "round": 1,
+        "phase": "end",
+        "agent": None,
+        "type": "no_consensus",
+        "content": "no quorum",
+    })
+    cli.main(["approve", debate_id])
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["result", debate_id])
+
+    assert exc.value.code == 1
+    assert "# No answer" in capsys.readouterr().out
+
+
 def test_result_reads_a_pre_genesis_transcript_without_error(workdir, capsys):
     store, debate_id = _make_awaiting(workdir, capsys)
     _record_consensus(store, debate_id)

@@ -127,6 +127,41 @@ def test_last_consensus_and_human_decision_win():
     assert result["note"] == "second decision"
 
 
+def test_approval_after_no_consensus_promotes_current_run_candidate_text():
+    result = build_result([
+        created(),
+        event("run_config", phase="run"),
+        event("candidate", round=2, agent="claude", content="fallback plan"),
+        event("no_consensus", round=2, content="no quorum"),
+        decision("approved"),
+    ])
+
+    assert result["status"] == "approved"
+    assert result["answer"] == "fallback plan"
+    assert result["candidate"] == {"agent": "claude", "round": 2}
+
+
+def test_new_run_and_terminal_outcomes_clear_stale_result_fields():
+    result = build_result([
+        created(),
+        consensus("first answer", round=1, agent="first"),
+        event("run_config", phase="run"),
+        event("error", round=2, content="propose failed", failed_phase="propose"),
+        event("run_config", phase="run"),
+        event("no_consensus", round=3, content="no quorum",
+              tally={"accepts": 1, "rejects": 1, "abstains": 0,
+                     "roster_size": 2, "required": 2}),
+    ])
+
+    assert result["status"] == "no_consensus"
+    assert result["candidate"] is None
+    assert result["tally"] == {"accepts": 1, "rejects": 1, "abstains": 0,
+                                "roster_size": 2, "required": 2}
+    assert result["failed_phase"] is None
+    assert result["decided_at"] is None
+    assert result["note"] is None
+
+
 def test_legacy_transcript_uses_caller_identity_fallbacks():
     result = build_result(
         [consensus(), decision("approved")],

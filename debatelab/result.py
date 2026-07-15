@@ -26,12 +26,25 @@ def build_result(
             reason = "debate has not produced a candidate yet"
         elif event_type == "run_config":
             status = "running"
+            candidate = None
+            candidate_text = None
+            tally = None
+            decided_at = None
+            note = None
+            round_ = None
+            failed_phase = None
             reason = "debate has not produced a candidate yet"
+        elif event_type == "candidate":
+            candidate = {"agent": event.get("agent"), "round": event.get("round")}
+            candidate_text = event.get("content")
         elif event_type == "consensus":
             candidate = {"agent": event.get("agent"), "round": event.get("round")}
             candidate_text = event.get("content")
             tally = event.get("tally")
             round_ = event.get("round")
+            decided_at = None
+            note = None
+            failed_phase = None
             status = "awaiting_human"
             reason = "awaiting human review"
         elif event_type == "no_consensus":
@@ -39,10 +52,17 @@ def build_result(
             reason = event.get("content")
             tally = event.get("tally")
             round_ = event.get("round")
+            decided_at = None
+            note = None
             failed_phase = None
         elif event_type == "error":
             status = "error"
             reason = event.get("content")
+            candidate = None
+            candidate_text = None
+            tally = None
+            decided_at = None
+            note = None
             failed_phase = event.get("failed_phase")
             round_ = event.get("round")
         elif event_type == "human_decision":
