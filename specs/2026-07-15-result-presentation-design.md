@@ -9,7 +9,7 @@ Predecessor: `specs/2026-07-14-protocol-correctness-design.md` ("Deferred roadma
 
 Give the answer this tool exists to produce a place to be read, and make "was there an answer" a question a script can ask without parsing prose.
 
-Scope: two derived artifacts (`result.json`, `final.md`), the command that prints them, the two event fields they need, and exit codes for `run` and `result`. No protocol changes, no new phases, no state-shape changes. `protocol.py`, `replay.py`, and `render_summary` are not touched.
+Scope: two derived artifacts (`result.json`, `final.md`), the command that prints them, the event fields they need, and exit codes for `run` and `result`. No protocol changes, no new phases, no state-shape changes. `protocol.py`, `replay.py`, and `render_summary` are not touched.
 
 ## Motivating defects
 
@@ -43,14 +43,15 @@ The resolution is that **the result needs no fold.** Every fact above already si
 
 ## Design
 
-### 1. Two additive event fields (`orchestrator.py`)
+### 1. Additive event fields (`orchestrator.py`)
 
-Record the two facts where they are known, rather than inferring them later.
+Record the facts where they are known, rather than inferring them later.
 
 ```json
 {"type": "no_consensus", "round": 5, "phase": "end", "agent": null,
  "content": "no consensus reached within the configured round limit",
- "tally": {"accepts": 1, "rejects": 1, "abstains": 1, "roster_size": 3, "required": 2}}
+ "tally": {"accepts": 1, "rejects": 1, "abstains": 1, "roster_size": 3, "required": 2},
+ "candidate": {"agent": "claude", "text": "..."}}
 
 {"type": "error", "round": 2, "phase": "end", "agent": null,
  "content": "only 1 agent(s) responded in phase 'critique' — need at least 2",
@@ -61,7 +62,9 @@ Record the two facts where they are known, rather than inferring them later.
 
 `failed_phase` is a **new key**; `phase` stays `"end"`. Changing `phase` in place would alter the meaning of an event type in every existing transcript, and `2026-07-15-transcript-replay-design.md` §2 explicitly reasons about `phase: "end"` events when discussing round recovery. Additive is free; a shape change is not.
 
-**Neither field can perturb `replay` or `fsck`.** Both types fold through `_status_setter` (`replay.py:118-121`), which reads only the type and writes only `status`. Extra keys are invisible to it, and `fsck` compares replayed state against `state.json`, which gains nothing. This is checked by test, not asserted by argument.
+`candidate` on `no_consensus` is a snapshot of `state["candidate"]` — whatever the checkpoint durably holds at the round-cap break, `None` if the roster never nominated one this run. It exists because the transient `candidate` event earlier in the transcript is not authoritative: a resume can load a lower round cap or interrupt between a `candidate` event and the checkpoint that would have consumed it, leaving a candidate in the event stream that the current run never actually held. `build_result` (§2) trusts this snapshot over any earlier `candidate` event for exactly that reason — it is the only way for an approved `no_consensus` debate to expose `answer` text that is honestly the run's own.
+
+**None of the three fields can perturb `replay` or `fsck`.** Both event types fold through `_status_setter` (`replay.py:118-121`), which reads only the type and writes only `status`. Extra keys are invisible to it, and `fsck` compares replayed state against `state.json`, which gains nothing. This is checked by test, not asserted by argument.
 
 ### 2. `debatelab/result.py` (new)
 
@@ -210,7 +213,7 @@ This matches `fsck`'s existing 0/1/3 and `grep`'s convention, where 1 means "not
 ### 8. Compatibility
 
 - **Legacy debates work.** `debate_created` is the only optional input and `title` has a fallback, so all four committed debates produce a real result rather than `fsck`'s `unverifiable`. This is the payoff of scanning terminal events instead of folding: the result needs no genesis.
-- Pre-existing transcripts lack `tally` on `no_consensus` and `failed_phase` on `error`. `build_result` treats both as absent, and `render_final` omits the tally sentence and says "halted in round N" without a phase. Degraded, honest, and never inferred.
+- Pre-existing transcripts lack `tally` and `candidate` on `no_consensus` and `failed_phase` on `error`. `build_result` treats all three as absent, and `render_final` omits the tally sentence and says "halted in round N" without a phase. Degraded, honest, and never inferred.
 - Debates that have never been re-run since this spec have no `result.json`/`final.md` on disk until their next checkpoint or decision. `debate result` computes fresh and is unaffected.
 - No event changes shape, no state key is added or removed, `render_summary` is untouched, and `replay`/`fsck` behavior is unchanged.
 
