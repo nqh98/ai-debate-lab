@@ -267,13 +267,15 @@ def test_unparseable_nomination_is_reasked_once_and_then_counted(tmp_path):
     did = store.create("T", "problem")
     a = MockAgent("a", ["prop a", "crit a", "rev a", "not a nomination",
                         "NOMINATE: b", "VOTE: accept"])
-    b = MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: a",
+    b = MockAgent("b", ["prop b", "crit b", "rev b", "NOMINATE: b",
                         "VOTE: accept"])
 
     Orchestrator(store, [a, b]).run(did, max_rounds=1)
 
     state = store.read_state(did)
-    assert state["candidate"]["agent"] in {"a", "b"}
+    assert state["candidate"]["agent"] == "b"
+    assert not any(e["type"] == "fallback_candidate"
+                   for e in store.read_events(did))
     assert state["abstained"] == []
     assert "could not be parsed" in a.prompts[-2]
     assert "NOMINATE: <agent-name>" in a.prompts[-2]
